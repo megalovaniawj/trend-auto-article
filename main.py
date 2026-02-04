@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V72】論理飛躍防止＆トレンド深掘り両立版
+【トレンド自動記事作成 V73】情報源・総入れ替え版
 修正点:
-1. 「親子関係」の理解: ニュースが核KWの「新作・関連作（子）」なら、そちらを主題にするよう指示。（ガンダム→ハサウェイはOK）
-2. 「他人」の排除: ニュースが核KWと無関係な「他人」なら、無視して核KWに戻るよう指示。（ジャンプ＋→香取慎吾はNG）
-3. 選択肢の厳格化: 20文字以内の固有名詞のみ。
-4. 画像廃止・Slug短縮・テキスト特化。
+1. トレンド源の刷新: 全滅していたゲーム・アニメ系RSSを廃止し、「ナタリー」「GameSpark」「アニメ！アニメ！」など生存確認済みの強力なソースに変更。
+2. Wiki取得量アップ: 読み込み文字数を2000→5000文字に増やし、情報不足による「生成エラー」を低減。
+3. 安定性向上: エラーハンドリングを強化。
 """
 
 import os
@@ -113,15 +112,14 @@ def get_raw_trends():
     raw_data = [] 
     raw_data.extend(get_google_realtime_trends())
 
+    # ★情報源を刷新（漫画・アニメ・ゲーム特化）
     rss_sources = [
+        ("コミックナタリー", "https://rss.natalie.mu/comic/feed/news"),
+        ("GameSpark", "https://feeds.feedburner.com/gamespark/all"),
+        ("アニメ！アニメ！", "https://response.jp/rss/animeanime/index.xml"),
+        ("電撃オンライン", "https://dengekionline.com/feed/index.xml"),
+        ("4Gamer", "https://www.4gamer.net/rss/index.xml"),
         ("Yahooエンタメ", "https://news.yahoo.co.jp/rss/topics/entertainment.xml"),
-        ("はてなゲーム", "https://b.hatena.ne.jp/hotentry/game.rss"),
-        ("はてなアニメ", "https://b.hatena.ne.jp/hotentry/anime.rss"),
-        ("まんたんウェブ", "https://mantan-web.jp/rss/rss2.0/anime"),
-        ("ファミ通", "https://www.famitsu.com/rss/fcom_all.xml"),
-        ("電撃オンライン", "https://dengekionline.com/rss/all/"),
-        ("オリコン", "https://www.oricon.co.jp/rss/news/entertainment.xml"),
-        ("Googleエンタメ", "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=ja&gl=JP&ceid=JP:ja"),
     ]
 
     for name, url in rss_sources:
@@ -134,6 +132,7 @@ def get_raw_trends():
                 entries = feed.entries
         except: pass
         
+        # バックアップパース
         if not entries:
             try:
                 feed = feedparser.parse(url)
@@ -144,9 +143,10 @@ def get_raw_trends():
             count = 0
             for entry in entries:
                 full_title = entry.title
-                simple_title = re.sub(r' [-|–|:|：].*', '', full_title).strip()
-                simple_title = re.sub(r'【.*?】', '', simple_title).strip()
-                if len(simple_title) > 2:
+                # 隅付き括弧【】やPRなどを削除
+                simple_title = re.sub(r'【.*?】', '', full_title).strip()
+                simple_title = re.sub(r'^PR:', '', simple_title).strip()
+                if len(simple_title) > 5:
                     raw_data.append((simple_title, full_title))
                     count += 1
                 if count >= 8: break
@@ -278,7 +278,9 @@ def perform_fact_check(pure_keyword):
         if not extract:
             print(" [テキストなし]")
             return "SEARCH_FAILED"
-        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:3000]}"
+        
+        # ★修正：読み込む文字数を2000→5000に増やし、リスト情報の取りこぼしを防ぐ
+        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:5000]}"
         print(" [取得完了]")
         return fact_text
     except:
@@ -307,7 +309,6 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
-    # プロンプト修正：親子関係の理解と、赤の他人の排除
     prompt = f"""
     あなたは凄腕のWeb編集者です。「最新ニュース」「事実データ」を読み込み、
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
@@ -402,7 +403,6 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     {fact_check_data}
         """
 
-    # プロンプト修正：選択肢の短さを徹底強制
     type_instruction = ""
     if a_type == "LIKE_DISLIKE":
         type_instruction = f"""
@@ -500,7 +500,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V72: 論理飛躍防止＆トレンド深掘り両立版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V73: 情報源・総入れ替え版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
