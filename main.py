@@ -619,6 +619,6 @@ else:
                 existing_titles.append(data['title'])
         except: print("❌ 投稿エラー")
         
-        time.sleep(5)
+        time.sleep(65)
 
 print(f"\n🎉 完了 ({success_count}記事)")
