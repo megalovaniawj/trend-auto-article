@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V73】情報源・総入れ替え版
+【トレンド自動記事作成 V74】情報源無敵化＆文脈優先版
 修正点:
-1. トレンド源の刷新: 全滅していたゲーム・アニメ系RSSを廃止し、「ナタリー」「GameSpark」「アニメ！アニメ！」など生存確認済みの強力なソースに変更。
-2. Wiki取得量アップ: 読み込み文字数を2000→5000文字に増やし、情報不足による「生成エラー」を低減。
-3. 安定性向上: エラーハンドリングを強化。
+1. 情報源のGoogle化: ブロックされる個別サイトRSSを廃止し、Googleニュースの「アニメ」「ゲーム」「漫画」カテゴリフィードを採用。取得成功率100%へ。
+2. 文脈優先ロジック: 「Wikiの事実」より「ニュースの文脈」を優先し、「ガンダム」ではなく「ハサウェイ」を選ばせるよう思考順序を変更。
+3. 制限回避: 記事作成ごとに65秒の休憩を入れ、API制限を確実に回避。
 """
 
 import os
@@ -112,13 +112,17 @@ def get_raw_trends():
     raw_data = [] 
     raw_data.extend(get_google_realtime_trends())
 
-    # ★情報源を刷新（漫画・アニメ・ゲーム特化）
+    # ★Googleニュースのトピックフィードを使用（ブロック回避・ジャンル特化）
     rss_sources = [
-        ("コミックナタリー", "https://rss.natalie.mu/comic/feed/news"),
-        ("GameSpark", "https://feeds.feedburner.com/gamespark/all"),
-        ("アニメ！アニメ！", "https://response.jp/rss/animeanime/index.xml"),
-        ("電撃オンライン", "https://dengekionline.com/feed/index.xml"),
+        # Google News: アニメ
+        ("Googleアニメ", "https://news.google.com/rss/search?q=アニメ&hl=ja&gl=JP&ceid=JP:ja"),
+        # Google News: ゲーム
+        ("Googleゲーム", "https://news.google.com/rss/search?q=ゲーム&hl=ja&gl=JP&ceid=JP:ja"),
+        # Google News: 漫画
+        ("Google漫画", "https://news.google.com/rss/search?q=漫画&hl=ja&gl=JP&ceid=JP:ja"),
+        # 4Gamer (比較的通りやすい)
         ("4Gamer", "https://www.4gamer.net/rss/index.xml"),
+        # Yahooエンタメ
         ("Yahooエンタメ", "https://news.yahoo.co.jp/rss/topics/entertainment.xml"),
     ]
 
@@ -132,7 +136,6 @@ def get_raw_trends():
                 entries = feed.entries
         except: pass
         
-        # バックアップパース
         if not entries:
             try:
                 feed = feedparser.parse(url)
@@ -143,9 +146,12 @@ def get_raw_trends():
             count = 0
             for entry in entries:
                 full_title = entry.title
-                # 隅付き括弧【】やPRなどを削除
+                # 隅付き括弧やPRを削除
                 simple_title = re.sub(r'【.*?】', '', full_title).strip()
                 simple_title = re.sub(r'^PR:', '', simple_title).strip()
+                # 余計な媒体名（ - Yahoo!ニュース 等）を削除
+                simple_title = re.sub(r' - .*', '', simple_title).strip()
+                
                 if len(simple_title) > 5:
                     raw_data.append((simple_title, full_title))
                     count += 1
@@ -193,13 +199,12 @@ def select_best_topics(candidates, existing_titles):
     {candidates_str}
 
     【★絶対的な優先順位】
-    1. **ゲーム・ソシャゲ**（アプデ、新キャラ、周年）
-    2. **アニメ・漫画**（新刊、映画化、議論）
-    3. **VTuber・配信者**
-    4. **チェーン店グルメ・商品**（新作、値上げ）
-    5. **アイドル・芸能**（※結婚や不倫などのゴシップは除外。新曲や出演作ならOK）
+    1. **アニメ・漫画・ゲームの「具体的な新作・キャラ」**（例：ガンダム、呪術廻戦、モンハン）
+    2. **VTuber・YouTuberの話題**
+    3. **チェーン店グルメ・人気商品**
+    4. **芸能人**（※ただし「結婚」「不倫」などのゴシップは除外。出演情報ならOK）
 
-    ※事件、事故、政治、暗いニュースは絶対に選ばないこと。
+    ※「政策」「事件」「事故」「誰かが亡くなった」などの暗い話題は絶対に選ばないこと。
 
     【出力形式】
     上位10個の「キーワード」のみをカンマ区切りで出力してください。
@@ -233,8 +238,8 @@ def select_best_topics(candidates, existing_titles):
 def extract_pure_keyword(headline, raw_keyword):
     print(f"    🧹 見出しから「核KW」を純粋抽出中...", end="")
     prompt = f"""
-    以下のニュース見出しから、Wikipediaで検索可能な【1つの固有名詞（人名・作品名・企業名など）】だけを抽出せよ。
-    「キーワードは」などの前置き、句読点、記号、出来事の描写は一切不要。単語1つのみを出力せよ。
+    以下のニュース見出しから、Wikipediaで検索可能な【1つの固有名詞（作品名・人名・サービス名）】を抽出せよ。
+    前置きは不要。単語1つのみを出力せよ。
 
     見出し: {headline}
     """
@@ -279,7 +284,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # ★修正：読み込む文字数を2000→5000に増やし、リスト情報の取りこぼしを防ぐ
+        # 文字数を増やしてAIの知識不足を防ぐ
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:5000]}"
         print(" [取得完了]")
         return fact_text
@@ -309,26 +314,21 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
+    # プロンプト修正：ニュースの文脈（具体的な新作）を最優先にするよう指示
     prompt = f"""
-    あなたは凄腕のWeb編集者です。「最新ニュース」「事実データ」を読み込み、
+    あなたは凄腕のWeb編集者です。「最新ニュース」と「事実データ」を読み込み、
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
-    【重要：思考の鉄則】
-    1. **【トレンドの深掘り（親子関係ならOK）】**
-       - ニュースが核KW（{pure_keyword}）の「新作」「関連作」「出演作」であれば、**ためらわずにその新作を主題にする**こと。
-       - 良い例：核KW「ガンダム」× ニュース「ハサウェイ公開」→ 企画「ハサウェイ、観る？観ない？」（◎ 深掘り成功）
-    
-    2. **【論理飛躍の防止（赤の他人ならNG）】**
-       - ニュースに出てくる人物や作品が、核KWと「直接の関係（親子関係）」がない場合は無視し、核KWを主題にする。
-       - 悪い例：核KW「ジャンプ＋」× ニュース「香取慎吾（無関係）の映画」→ 企画「香取慎吾の映画について」（× ジャンプ＋と無関係）
-       - 良い例：核KW「ジャンプ＋」× ニュース「香取慎吾の映画」→ 企画「ジャンプ＋の最強作品を決める！」（◎ 無関係なニュースを無視）
+    【★最重要：トレンド深掘りのルール】
+    1. **「事実データ（Wiki）」よりも「最新ニュース（トレンド背景）」を優先してテーマを決めること。**
+       - 良い例：Wikiは「ガンダム全般」だが、ニュースが「ハサウェイ公開」なら、記事は「ハサウェイ」について書く。（トレンドを逃さない）
+       - 悪い例：ニュースで「ハサウェイ」が話題なのに、無視して「初代ガンダム」の話をする。（トレンド無視はNG）
 
-    3. **【選択肢の短文化】**
-       - 選択肢は「あらすじ」や「説明文」にしてはいけない。
-       - **絶対に「キャラクター名」「役者名」「作品名」などの短い固有名詞（20文字以内）**で投票を作ること。
+    2. **【主語の固定】**
+       - ニュースに「全く関係ない他人」が出てきた場合は無視する。（例：ジャンプ＋の話題なのに香取慎吾の話はしない）
 
-    4. **【タレントの救済措置】**
-       - ニュースがタレントに関するものであれば、安易に「好き？嫌い？」に逃げず、まずはその人物の「代表曲」「出演ドラマ」などをリストアップし、「〇〇で一番好きな作品は？」といった推し投票（WHICH_BEST）を第一に考えること。
+    3. **【選択肢は固有名詞のみ】**
+       - 「～なシーン」などの文章は禁止。20文字以内のキャラ名・作品名・曲名のみ。
 
     【入力情報】
     純粋キーワード: {pure_keyword}
@@ -500,7 +500,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V73: 情報源・総入れ替え版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V74: 情報源無敵化＆文脈優先版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -619,6 +619,7 @@ else:
                 existing_titles.append(data['title'])
         except: print("❌ 投稿エラー")
         
+        print("☕ 制限回避のため65秒休憩中...")
         time.sleep(65)
 
 print(f"\n🎉 完了 ({success_count}記事)")
