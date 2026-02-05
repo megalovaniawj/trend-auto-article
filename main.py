@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V74】情報源無敵化＆文脈優先版
+【トレンド自動記事作成 V75】解説濃厚・TPM安全対策版
 修正点:
-1. 情報源のGoogle化: ブロックされる個別サイトRSSを廃止し、Googleニュースの「アニメ」「ゲーム」「漫画」カテゴリフィードを採用。取得成功率100%へ。
-2. 文脈優先ロジック: 「Wikiの事実」より「ニュースの文脈」を優先し、「ガンダム」ではなく「ハサウェイ」を選ばせるよう思考順序を変更。
-3. 制限回避: 記事作成ごとに65秒の休憩を入れ、API制限を確実に回避。
+1. 解説の強化: 記事の解説文を「100文字」→「200〜300文字」に増量し、Wikiのトリビアを引用して内容を濃くするよう指示。
+2. TPM対策（時間差攻撃）: 「思考」と「執筆」の間に10秒の休憩を挟み、APIのリミットオーバー（15K制限）を回避。
+3. Wiki調整: 読み込み文字数を5000→4000に微調整し、トークンあふれを防止。
 """
 
 import os
@@ -114,15 +114,10 @@ def get_raw_trends():
 
     # ★Googleニュースのトピックフィードを使用（ブロック回避・ジャンル特化）
     rss_sources = [
-        # Google News: アニメ
         ("Googleアニメ", "https://news.google.com/rss/search?q=アニメ&hl=ja&gl=JP&ceid=JP:ja"),
-        # Google News: ゲーム
         ("Googleゲーム", "https://news.google.com/rss/search?q=ゲーム&hl=ja&gl=JP&ceid=JP:ja"),
-        # Google News: 漫画
         ("Google漫画", "https://news.google.com/rss/search?q=漫画&hl=ja&gl=JP&ceid=JP:ja"),
-        # 4Gamer (比較的通りやすい)
         ("4Gamer", "https://www.4gamer.net/rss/index.xml"),
-        # Yahooエンタメ
         ("Yahooエンタメ", "https://news.yahoo.co.jp/rss/topics/entertainment.xml"),
     ]
 
@@ -146,12 +141,9 @@ def get_raw_trends():
             count = 0
             for entry in entries:
                 full_title = entry.title
-                # 隅付き括弧やPRを削除
                 simple_title = re.sub(r'【.*?】', '', full_title).strip()
                 simple_title = re.sub(r'^PR:', '', simple_title).strip()
-                # 余計な媒体名（ - Yahoo!ニュース 等）を削除
                 simple_title = re.sub(r' - .*', '', simple_title).strip()
-                
                 if len(simple_title) > 5:
                     raw_data.append((simple_title, full_title))
                     count += 1
@@ -199,12 +191,13 @@ def select_best_topics(candidates, existing_titles):
     {candidates_str}
 
     【★絶対的な優先順位】
-    1. **アニメ・漫画・ゲームの「具体的な新作・キャラ」**（例：ガンダム、呪術廻戦、モンハン）
-    2. **VTuber・YouTuberの話題**
-    3. **チェーン店グルメ・人気商品**
-    4. **芸能人**（※ただし「結婚」「不倫」などのゴシップは除外。出演情報ならOK）
+    1. **ゲーム・ソシャゲ**（アプデ、新キャラ、周年）
+    2. **アニメ・漫画**（新刊、映画化、議論）
+    3. **VTuber・配信者**
+    4. **チェーン店グルメ・商品**
+    5. **アイドル・芸能**（※結婚・不倫などのゴシップは除外。出演情報ならOK）
 
-    ※「政策」「事件」「事故」「誰かが亡くなった」などの暗い話題は絶対に選ばないこと。
+    ※事件、事故、政治、暗いニュースは絶対に選ばないこと。
 
     【出力形式】
     上位10個の「キーワード」のみをカンマ区切りで出力してください。
@@ -284,8 +277,8 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # 文字数を増やしてAIの知識不足を防ぐ
-        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:5000]}"
+        # ★修正：5000→4000に減らしてTPMを節約
+        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
     except:
@@ -314,21 +307,22 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
-    # プロンプト修正：ニュースの文脈（具体的な新作）を最優先にするよう指示
     prompt = f"""
     あなたは凄腕のWeb編集者です。「最新ニュース」と「事実データ」を読み込み、
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
-    【★最重要：トレンド深掘りのルール】
-    1. **「事実データ（Wiki）」よりも「最新ニュース（トレンド背景）」を優先してテーマを決めること。**
-       - 良い例：Wikiは「ガンダム全般」だが、ニュースが「ハサウェイ公開」なら、記事は「ハサウェイ」について書く。（トレンドを逃さない）
-       - 悪い例：ニュースで「ハサウェイ」が話題なのに、無視して「初代ガンダム」の話をする。（トレンド無視はNG）
-
-    2. **【主語の固定】**
-       - ニュースに「全く関係ない他人」が出てきた場合は無視する。（例：ジャンプ＋の話題なのに香取慎吾の話はしない）
+    【重要：思考の鉄則】
+    1. **【トレンドの深掘り】**
+       - ニュースが核KW（{pure_keyword}）の「新作」「関連作」「出演作」であれば、**ためらわずにその新作を主題にする**こと。
+    
+    2. **【論理飛躍の防止】**
+       - ニュースに出てくる人物や作品が、核KWと「直接の関係（親子関係）」がない場合は無視し、核KWを主題にする。
 
     3. **【選択肢は固有名詞のみ】**
-       - 「～なシーン」などの文章は禁止。20文字以内のキャラ名・作品名・曲名のみ。
+       - **絶対に「キャラクター名」「役者名」「作品名」などの短い固有名詞（20文字以内）**で投票を作ること。
+
+    4. **【タレントの救済措置】**
+       - ニュースがタレントに関するものであれば、安易に「好き？嫌い？」に逃げず、まずはその人物の「代表曲」「出演ドラマ」などをリストアップし、「〇〇で一番好きな作品は？」といった推し投票（WHICH_BEST）を第一に考えること。
 
     【入力情報】
     純粋キーワード: {pure_keyword}
@@ -403,13 +397,14 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     {fact_check_data}
         """
 
+    # プロンプト修正：解説を濃厚にする指示
     type_instruction = ""
     if a_type == "LIKE_DISLIKE":
         type_instruction = f"""
         **【対決型（2択）】**
         - タイトル: 「{title_idea}」
         - 選択肢: 2〜3個（例: 好き/嫌い/普通）
-        - **解説文(text)**: 各選択肢を選ぶ理由を100文字以内で熱く語る。
+        - **解説文(text)**: 各選択肢を選ぶ理由を**200〜300文字程度**で熱く語ること。Wikiの情報を具体的に引用し、説得力を持たせること。
         """
     elif a_type == "WHICH_BEST":
         type_instruction = f"""
@@ -417,16 +412,16 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         - タイトル: 「{title_idea}」
         - **【重要：選択肢（items）のルール】**
           1. **絶対に「作品名」「曲名」「キャラ名」などの固有名詞のみにすること。**
-          2. **「あらすじ」や「文章」は禁止。絶対に20文字以内で完結させること。**
+          2. **「あらすじ」や「文章」は禁止。20文字以内で完結させること。**
           3. 5〜10個列挙。「その他」も必須。
-        - **解説文(text)**: その選択肢の魅力を100文字以内で解説。
+        - **解説文(text)**: その選択肢の魅力や背景を**200〜300文字程度**で深掘り解説すること。Wikiの情報を盛り込み、ファンの共感を呼ぶ内容にすること。
         """
     elif a_type == "RATE":
         type_instruction = f"""
         **【頻度・実態型】**
         - タイトル: 「{title_idea}」
         - 選択肢: 段階的な数（毎日 / 週1回 / 行かない 等）。
-        - **解説文(text)**: その頻度の人の心理を解説。
+        - **解説文(text)**: その頻度の人の心理や生活スタイルを**200文字程度**で具体的に描写すること。
         """
 
     prompt = f"""
@@ -454,13 +449,13 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         "tags": ["タグ"],
         "category_slug": "{cat}", 
         "h2_title": "導入H2",
-        "h2_text": "導入文(300文字以内)",
+        "h2_text": "導入文(300〜400文字程度。ニュースの背景と、なぜ投票するのかを盛り込む)",
         "comparison_table": "| A | B |\\n|---|---|", 
         "fact_h3": "豆知識H3",
         "info_fact": "豆知識",
         "items": [ 
-            {{ "name": "選択肢1(短く)", "text": "解説", "votes": 234 }}, 
-            {{ "name": "選択肢2(短く)", "text": "解説", "votes": 87 }}
+            {{ "name": "選択肢1(短く)", "text": "濃厚な解説(200文字以上)", "votes": 234 }}, 
+            {{ "name": "選択肢2(短く)", "text": "濃厚な解説(200文字以上)", "votes": 87 }}
         ],
         "comments": [ {{ "name": "匿名", "text": "コメント" }} ],
         "infos": [ {{ "h3": "補足H3", "text": "補足" }} ]
@@ -500,7 +495,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V74: 情報源無敵化＆文脈優先版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V75: 解説濃厚・TPM安全対策版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -535,6 +530,11 @@ else:
             analysis_data['article_type'] = "LIKE_DISLIKE"
             analysis_data['proposed_title'] = f"{analysis_data['core_keyword']}、好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
+
+        # ★TPM対策：思考フェーズ（Analysis）と執筆フェーズ（Generation）の間に休憩を入れる
+        print("☕ 制限回避のため10秒休憩中...", end="")
+        time.sleep(10)
+        print(" 再開")
 
         data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
         if not data: continue
