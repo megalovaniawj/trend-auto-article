@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V75】解説濃厚・TPM安全対策版
+【トレンド自動記事作成 V78】安全第一・嘘禁止版
 修正点:
-1. 解説の強化: 記事の解説文を「100文字」→「200〜300文字」に増量し、Wikiのトリビアを引用して内容を濃くするよう指示。
-2. TPM対策（時間差攻撃）: 「思考」と「執筆」の間に10秒の休憩を挟み、APIのリミットオーバー（15K制限）を回避。
-3. Wiki調整: 読み込み文字数を5000→4000に微調整し、トークンあふれを防止。
+1. 嘘の徹底排除: Wikiにない情報は「SKIP（作成中止）」するよう指示。無理な捏造を防ぐ。
+2. 安全策の固定: 人物・キャラ記事は「好き・嫌い」に、作品記事は「キャラ投票」にパターンを完全固定。
+3. 選択肢フィルター: 「…」や「。」を含む選択肢（文章）が出たらエラー扱いにする厳格なチェック機能。
 """
 
 import os
@@ -112,7 +112,6 @@ def get_raw_trends():
     raw_data = [] 
     raw_data.extend(get_google_realtime_trends())
 
-    # ★Googleニュースのトピックフィードを使用（ブロック回避・ジャンル特化）
     rss_sources = [
         ("Googleアニメ", "https://news.google.com/rss/search?q=アニメ&hl=ja&gl=JP&ceid=JP:ja"),
         ("Googleゲーム", "https://news.google.com/rss/search?q=ゲーム&hl=ja&gl=JP&ceid=JP:ja"),
@@ -277,7 +276,6 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # ★修正：5000→4000に減らしてTPMを節約
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
@@ -307,22 +305,28 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
+    # ★プロンプト：嘘禁止・パターン固定・SKIP命令
     prompt = f"""
-    あなたは凄腕のWeb編集者です。「最新ニュース」と「事実データ」を読み込み、
+    あなたは凄腕のWeb編集者です。
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
-    【重要：思考の鉄則】
-    1. **【トレンドの深掘り】**
-       - ニュースが核KW（{pure_keyword}）の「新作」「関連作」「出演作」であれば、**ためらわずにその新作を主題にする**こと。
+    【★鉄の掟（これを守れない場合は『SKIP』と出力せよ）】
     
-    2. **【論理飛躍の防止】**
-       - ニュースに出てくる人物や作品が、核KWと「直接の関係（親子関係）」がない場合は無視し、核KWを主題にする。
+    1. **【捏造の完全禁止】**
+       - 選択肢（items）は、必ず提供された「事実データ（Wiki）」の中に実在する名称のみで作ること。
+       - **もしWikiにデータがない場合は、無理に作らず、記事タイプを『SKIP』にして終了すること。**
+       - 「名セリフ」「名シーン」はWikiに載っていないため、AIが勝手に作ると嘘になる。よって**これらは禁止企画**とする。
 
-    3. **【選択肢は固有名詞のみ】**
-       - **絶対に「キャラクター名」「役者名」「作品名」などの短い固有名詞（20文字以内）**で投票を作ること。
+    2. **【安全策：企画パターンの固定】**
+       - **「特定のキャラクター」や「実在の人物」**が話題の場合：
+         👉 迷わず**「LIKE_DISLIKE（好き？普通？嫌い？）」**にする。これが一番安全で盛り上がる。
+       
+       - **「作品全体（アニメ・ゲーム）」**が話題の場合：
+         👉 迷わず**「WHICH_BEST（推しキャラ投票）」**にする。（Wikiにキャラ名一覧がある場合のみ）
 
-    4. **【タレントの救済措置】**
-       - ニュースがタレントに関するものであれば、安易に「好き？嫌い？」に逃げず、まずはその人物の「代表曲」「出演ドラマ」などをリストアップし、「〇〇で一番好きな作品は？」といった推し投票（WHICH_BEST）を第一に考えること。
+    3. **【選択肢の検閲】**
+       - 選択肢は**「キャラクター名」「作品名」「役者名」などの短い固有名詞（20文字以内）**しか認めない。
+       - 「～なセリフ」「～なシーン」「…」を含む文章は即時エラーとみなす。
 
     【入力情報】
     純粋キーワード: {pure_keyword}
@@ -333,15 +337,14 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     {ai_fact_input}
 
     【分類する記事タイプ】
-    - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」「見る？見ない？」「買う？買わない？」
-    - **WHICH_BEST (多選択)**: 「推しは？」「どれを買う？」 (※タイトルに『〇〇の曲で』『〇〇のキャラで』『〇〇の商品で』と具体的に入れること)
-    - **RATE (生活)**: 「利用頻度は？」(※段階的な選択肢を想定)
-    - **SKIP (作成不可)**
+    - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」
+    - **WHICH_BEST (多選択)**: 「推しキャラは？」「好きな作品は？」 (※固有名詞のみ)
+    - **SKIP (作成不可)**: データ不足、またはセリフ投票になりそうな場合。
 
     【出力形式(JSON)】
     {{
         "core_keyword": "{pure_keyword}",
-        "article_type": "LIKE_DISLIKE" or "WHICH_BEST" or "RATE" or "SKIP",
+        "article_type": "LIKE_DISLIKE" or "WHICH_BEST" or "SKIP",
         "proposed_title": "一番盛り上がるタイトル（※必ずキャラ名・曲名・商品名を入れる）",
         "reason": "なぜ今トレンドなのかの背景",
         "suggested_category": "contents" または "people" (タレントならpeople、アニメ・ゲームならgame)
@@ -397,31 +400,30 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     {fact_check_data}
         """
 
-    # プロンプト修正：解説を濃厚にする指示
     type_instruction = ""
     if a_type == "LIKE_DISLIKE":
         type_instruction = f"""
         **【対決型（2択）】**
         - タイトル: 「{title_idea}」
-        - 選択肢: 2〜3個（例: 好き/嫌い/普通）
-        - **解説文(text)**: 各選択肢を選ぶ理由を**200〜300文字程度**で熱く語ること。Wikiの情報を具体的に引用し、説得力を持たせること。
+        - 選択肢: 2〜3個（例: 好き/嫌い/普通、見る/見ない）
+        - **解説文(text)**: 各選択肢を選ぶ理由を**200〜300文字程度**で熱く語ること。
         """
     elif a_type == "WHICH_BEST":
         type_instruction = f"""
         **【多選択型（推し）】**
         - タイトル: 「{title_idea}」
         - **【重要：選択肢（items）のルール】**
-          1. **絶対に「作品名」「曲名」「キャラ名」などの固有名詞のみにすること。**
-          2. **「あらすじ」や「文章」は禁止。20文字以内で完結させること。**
+          1. **絶対に「作品名」「キャラ名」「役者名」などの固有名詞（20文字以内）のみにすること。**
+          2. **「セリフ」や「あらすじ」などの文章は禁止。もし思いつかない場合は記事作成を中止せよ。**
           3. 5〜10個列挙。「その他」も必須。
-        - **解説文(text)**: その選択肢の魅力や背景を**200〜300文字程度**で深掘り解説すること。Wikiの情報を盛り込み、ファンの共感を呼ぶ内容にすること。
+        - **解説文(text)**: その選択肢の魅力や背景を**200〜300文字程度**で深掘り解説すること。
         """
     elif a_type == "RATE":
         type_instruction = f"""
         **【頻度・実態型】**
         - タイトル: 「{title_idea}」
         - 選択肢: 段階的な数（毎日 / 週1回 / 行かない 等）。
-        - **解説文(text)**: その頻度の人の心理や生活スタイルを**200文字程度**で具体的に描写すること。
+        - **解説文(text)**: その頻度の人の心理を**200文字程度**で描写すること。
         """
 
     prompt = f"""
@@ -441,24 +443,23 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     【投票数】
     * ランダムな数値（例: 487, 123）
 
-    【★JSON形式（slugは英語小文字とハイフンのみで短くすること。数字はつけない）】
+    【★JSON形式（slugは英語小文字とハイフンのみ。数字禁止）】
     {{
         "title": "タイトル",
         "slug": "short-english-slug",
         "is_product": false,
         "tags": ["タグ"],
         "category_slug": "{cat}", 
-        "h2_title": "導入H2",
-        "h2_text": "導入文(300〜400文字程度。ニュースの背景と、なぜ投票するのかを盛り込む)",
+        "h2_title": "導入H2見出し",
+        "h2_text": "導入文（300文字以上）。ニュースの背景を説明し、投票につなげる。",
         "comparison_table": "| A | B |\\n|---|---|", 
-        "fact_h3": "豆知識H3",
-        "info_fact": "豆知識",
+        "fact_h3": "豆知識の見出し",
+        "info_fact": "豆知識の本文（200文字程度）。Wikiのトリビアを紹介。",
         "items": [ 
-            {{ "name": "選択肢1(短く)", "text": "濃厚な解説(200文字以上)", "votes": 234 }}, 
-            {{ "name": "選択肢2(短く)", "text": "濃厚な解説(200文字以上)", "votes": 87 }}
+            {{ "name": "選択肢1(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 234 }}, 
+            {{ "name": "選択肢2(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 87 }}
         ],
-        "comments": [ {{ "name": "匿名", "text": "コメント" }} ],
-        "infos": [ {{ "h3": "補足H3", "text": "補足" }} ]
+        "comments": [ {{ "name": "匿名", "text": "コメント" }} ]
     }}
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
@@ -495,7 +496,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V75: 解説濃厚・TPM安全対策版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V78: 安全第一・嘘禁止版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -531,7 +532,7 @@ else:
             analysis_data['proposed_title'] = f"{analysis_data['core_keyword']}、好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
 
-        # ★TPM対策：思考フェーズ（Analysis）と執筆フェーズ（Generation）の間に休憩を入れる
+        # TPM対策：休憩
         print("☕ 制限回避のため10秒休憩中...", end="")
         time.sleep(10)
         print(" 再開")
@@ -578,14 +579,28 @@ else:
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
+        # HTML組み立て
+        content = ""
+        # 1. 導入部
+        if data.get('h2_title') and data.get('h2_text'):
+            content += f"<h2>{data['h2_title']}</h2>"
+            content += f"<p>{data['h2_text']}</p><br>"
+
+        # 2. 投票システム
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
             sc = f'[vote_bar items="{", ".join(items_str)}"]\n\n[vote_summary items="{", ".join(items_str)}"]'
-        
-        content = sc
+        content += sc
+
+        # 3. アフィリエイト
         if data.get('is_product'):
             content += f"\n\n{AFFILIATE_SHORTCODE.format(word=analysis_data['core_keyword'])}"
+
+        # 4. Wiki豆知識（最後）
+        if data.get('fact_h3') and data.get('info_fact'):
+             content += f"\n\n<h3>{data['fact_h3']}</h3>"
+             content += f"<p>{data['info_fact']}</p>"
 
         now = datetime.now()
         post_time = now - timedelta(hours=1)
