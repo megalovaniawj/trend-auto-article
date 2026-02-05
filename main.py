@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V81】記事数確保＆レイアウト適正化版
+【トレンド自動記事作成 V82】レイアウト完全修正・記事数保証版
 修正点:
-1. 記事数保証: AI編集長が選んだネタが少ない場合、強制的に候補リストから補充して3記事以上を確保。
-2. レイアウト修正: 投票システムを記事最上部に配置し、導入文をその下に移動。
-3. タイトル修正: 「推し？」と「好き嫌い？」の混在を禁止し、日本語として自然な形に固定。
+1. レイアウト: 「投票システム」を最上部に配置。導入文や目次は全てその下に移動。
+2. コンテンツ増量: 下部に配置するテキスト（導入文・豆知識）の文字数を大幅に増やし、読み応えを確保。
+3. 記事数保証: AIがネタ選びをサボっても、強制的に3記事分まで候補を補充して完走させる。
+4. タイトル適正化: 「推し」と「好き嫌い」の混同を禁止。
 """
 
 import os
@@ -179,9 +180,8 @@ def select_best_topics(candidates, existing_titles):
             if c['keyword'] in exist: is_duplicate = True; break
         if not is_duplicate: safe_candidates.append(c)
     
-    # 候補が少なすぎる場合はそのまま返す
     if len(safe_candidates) < 3:
-        print(f" (候補不足のため全採用)")
+        print(" (候補不足のため全採用)")
         return safe_candidates
 
     candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in safe_candidates[:80]])
@@ -201,7 +201,7 @@ def select_best_topics(candidates, existing_titles):
     ※事件、事故、政治、暗いニュースは絶対に選ばないこと。
 
     【出力形式】
-    上位10個の「キーワード」のみをカンマ区切りで出力してください。必ず10個選ぶこと。
+    上位10個の「キーワード」のみをカンマ区切りで出力してください。
     """
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
@@ -222,7 +222,7 @@ def select_best_topics(candidates, existing_titles):
                         break
     except: pass
     
-    # ★修正：AIの選出が少ない場合、強制的にsafe_candidatesから補充する
+    # ★修正：AIの選出が少ない場合、強制的にsafe_candidatesから補充して3記事以上確保
     if len(final_selection) < ARTICLES_TO_CREATE:
         print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
         current_kws = [x['keyword'] for x in final_selection]
@@ -283,8 +283,8 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # 4000文字維持
-        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
+        # 安全のため2500文字に制限（エラー回避）
+        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:2500]}"
         print(" [取得完了]")
         return fact_text
     except:
@@ -322,12 +322,12 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     【★鉄の掟（守れない場合は『SKIP』）】
     
     1. **【タイトル生成テンプレート（混合禁止！）】**
-       - **WHICH_BESTの場合**: 必ず「【{pure_keyword}】（具体的なテーマ）は？推しは？」という形式にする。
+       - **WHICH_BESTの場合**: 「【{pure_keyword}】（具体的なテーマ）は？推しは？」
          ❌ダメな例：「Number_i、推しは？好き？嫌い？」（疑問文を混ぜるな）
          ⭕️良い例：「Number_i、一番好きな曲は？」「Number_i、推しメンバーは？」
        
-       - **LIKE_DISLIKEの場合**: 必ず「{pure_keyword}、好き？普通？嫌い？」という形式で固定する。
-         ❌ダメな例：「平野紫耀、推しは？好き？嫌い？」（意味不明）
+       - **LIKE_DISLIKEの場合**: 「{pure_keyword}、好き？普通？嫌い？」で固定。
+         ❌ダメな例：「平野紫耀、推しは？好き？嫌い？」
          ⭕️良い例：「平野紫耀、好き？普通？嫌い？」
 
     2. **【企画パターンの固定】**
@@ -460,11 +460,11 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         "is_product": false,
         "tags": ["タグ"],
         "category_slug": "{cat}", 
-        "h2_title": "導入H2見出し",
-        "h2_text": "導入文（300文字以上）。ニュースの背景を説明し、投票につなげる。",
+        "h2_title": "導入H2見出し（例：『〇〇』がついに話題に！）",
+        "h2_text": "記事冒頭の導入文（★400〜500文字程度）。ニュースの背景を詳しく説明し、『そこで今回は、みんなの推しを聞いてみたいと思います！』と投票につなげる。",
         "comparison_table": "| A | B |\\n|---|---|", 
         "fact_h3": "豆知識の見出し",
-        "info_fact": "豆知識の本文（200文字程度）。Wikiのトリビアを紹介。",
+        "info_fact": "豆知識の本文（★300〜400文字程度）。Wikiのトリビアを詳しく紹介する。",
         "items": [ 
             {{ "name": "選択肢1(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 234 }}, 
             {{ "name": "選択肢2(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 87 }}
@@ -506,7 +506,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V81: 記事数確保＆レイアウト適正化版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V82: レイアウト完全修正・記事数保証版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -589,10 +589,10 @@ else:
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # ★HTML組み立て（投票ファースト！）
+        # ★HTML組み立て（投票システムを最優先！）
         content = ""
         
-        # 1. 投票システム (最上部へ移動)
+        # 1. 投票システム (最上部)
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
