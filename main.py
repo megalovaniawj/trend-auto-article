@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V82】レイアウト完全修正・記事数保証版
+【トレンド自動記事作成 V87】完全指示遵守・デザイン適用版
 修正点:
-1. レイアウト: 「投票システム」を最上部に配置。導入文や目次は全てその下に移動。
-2. コンテンツ増量: 下部に配置するテキスト（導入文・豆知識）の文字数を大幅に増やし、読み応えを確保。
-3. 記事数保証: AIがネタ選びをサボっても、強制的に3記事分まで候補を補充して完走させる。
-4. タイトル適正化: 「推し」と「好き嫌い」の混同を禁止。
+1. HTMLデザインの完全適用: 
+   - 記事下部に、ユーザー指定の「wiki-section（枠線付き）」と「豆知識（黄色い枠付き）」のHTML構造をそのまま再現し、そこにAIの長文テキストを流し込む。
+2. アフィリエイト削除: 不要な機能を完全撤去。
+3. Wiki読み込み量: 4000文字に設定。
+4. タイトル生成: キャラクター記事には必ず【作品名】を含めるよう厳格化。
 """
 
 import os
@@ -43,7 +44,6 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 
 MODEL_NAME = "gemma-3-27b-it"
 ARTICLES_TO_CREATE = 3
-AFFILIATE_SHORTCODE = '<div class="aff-btn">[btn url="https://www.amazon.co.jp/s?k={word}" text="Amazonで「{word}」を見る" target="_blank"]</div>'
 
 # ユーザーエージェント
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -222,7 +222,7 @@ def select_best_topics(candidates, existing_titles):
                         break
     except: pass
     
-    # ★修正：AIの選出が少ない場合、強制的にsafe_candidatesから補充して3記事以上確保
+    # AI選出が少ない場合の強制補充（3記事保証）
     if len(final_selection) < ARTICLES_TO_CREATE:
         print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
         current_kws = [x['keyword'] for x in final_selection]
@@ -283,8 +283,8 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # 安全のため2500文字に制限（エラー回避）
-        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:2500]}"
+        # ★Wiki読み込み量：4000文字に戻す
+        fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
     except:
@@ -314,22 +314,18 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
-    # ★プロンプト修正：タイトル混合禁止
+    # ★プロンプト：タイトルに【作品名】を強制
     prompt = f"""
     あなたは凄腕のWeb編集者です。
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
     【★鉄の掟（守れない場合は『SKIP』）】
     
-    1. **【タイトル生成テンプレート（混合禁止！）】**
+    1. **【タイトル生成テンプレート（絶対に守れ！）】**
        - **WHICH_BESTの場合**: 「【{pure_keyword}】（具体的なテーマ）は？推しは？」
-         ❌ダメな例：「Number_i、推しは？好き？嫌い？」（疑問文を混ぜるな）
-         ⭕️良い例：「Number_i、一番好きな曲は？」「Number_i、推しメンバーは？」
+       - **LIKE_DISLIKEの場合**: 
+         - **キャラ・人物名なら**: 「【作品名】{pure_keyword}、好き？普通？嫌い？」という形式にする。単独の「入間くん」はNG。「【魔入りました！入間くん】入間くん」とする。
        
-       - **LIKE_DISLIKEの場合**: 「{pure_keyword}、好き？普通？嫌い？」で固定。
-         ❌ダメな例：「平野紫耀、推しは？好き？嫌い？」
-         ⭕️良い例：「平野紫耀、好き？普通？嫌い？」
-
     2. **【企画パターンの固定】**
        - **「キャラクター・人物」** 👉 **「LIKE_DISLIKE（好感度投票）」**
        - **「作品全体・グループ」** 👉 **「WHICH_BEST（推し投票）」**
@@ -354,7 +350,7 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     {{
         "core_keyword": "{pure_keyword}",
         "article_type": "LIKE_DISLIKE" or "WHICH_BEST" or "SKIP",
-        "proposed_title": "一番盛り上がるタイトル（※テンプレート厳守）",
+        "proposed_title": "一番盛り上がるタイトル（※作品名を含めること）",
         "reason": "なぜ今トレンドなのかの背景",
         "suggested_category": "contents" または "people"
     }}
@@ -453,7 +449,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     【投票数】
     * ランダムな数値（例: 487, 123）
 
-    【★JSON形式（slugは英語小文字とハイフンのみ。数字禁止）】
+    【★JSON形式】
     {{
         "title": "タイトル",
         "slug": "short-english-slug",
@@ -506,7 +502,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V82: レイアウト完全修正・記事数保証版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V87: 完全指示遵守・デザイン適用版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -539,7 +535,7 @@ else:
         if analysis_data['article_type'] == "WHICH_BEST" and fact_check_data == "SEARCH_FAILED":
             print(f" -> ⚠️検索失敗: 嘘を防ぐため「{analysis_data['core_keyword']}」の好感度調査（好き/嫌い）に変更します。")
             analysis_data['article_type'] = "LIKE_DISLIKE"
-            analysis_data['proposed_title'] = f"{analysis_data['core_keyword']}、好き？普通？苦手？"
+            analysis_data['proposed_title'] = f"【{analysis_data['core_keyword']}】好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
 
         # TPM対策：休憩
@@ -558,10 +554,6 @@ else:
         
         items_str = []
         meta = {
-            'wiki_h2_title': data.get('h2_title',''),
-            'wiki_h2_text': data.get('h2_text',''),
-            'wiki_fact_h3': data.get('fact_h3',''),
-            'wiki_info_fact': data.get('info_fact',''),
             'post_views_count': '0'
         }
         if data.get('comparison_table'): meta['wiki_comparison_table'] = data['comparison_table']
@@ -572,46 +564,47 @@ else:
             name = item_choice['name']
             meta[f'wiki_info{idx}_h3'] = name
             meta[f'wiki_info_{idx}'] = item_choice.get('text', '')
-            
-            # 画像URLは空欄
             meta[f'wiki_item_name_{idx}'] = name
             meta[f'wiki_item_img_{idx}'] = ""
-            
             votes = item_choice.get('votes', 0)
             if votes % 10 == 0: votes += random.randint(1, 9)
             meta[f'vote_multi_idx_{i}'] = str(votes)
-            
             if len(data['items']) == 2:
                 k = 'vote_count_a' if i == 0 else 'vote_count_b'
                 meta[k] = str(votes)
-            
             items_str.append(name)
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # ★HTML組み立て（投票システムを最優先！）
+        # ★HTML組み立て（ここが最重要：ユーザー指示通りの構成）
         content = ""
         
-        # 1. 投票システム (最上部)
+        # 1. 投票システム（最上部）
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
             sc = f'[vote_bar items="{", ".join(items_str)}"]\n\n[vote_summary items="{", ".join(items_str)}"]'
         content += sc
 
-        # 2. 導入部（その下）
+        # 2. 下部コンテンツエリア（HTML直書き・デザイン適用）
         if data.get('h2_title') and data.get('h2_text'):
-            content += f"\n\n<h2>{data['h2_title']}</h2>"
-            content += f"<p>{data['h2_text']}</p><br>"
-
-        # 3. アフィリエイト
-        if data.get('is_product'):
-            content += f"\n\n{AFFILIATE_SHORTCODE.format(word=analysis_data['core_keyword'])}"
-
-        # 4. Wiki豆知識（最後）
-        if data.get('fact_h3') and data.get('info_fact'):
-             content += f"\n\n<h3>{data['fact_h3']}</h3>"
-             content += f"<p>{data['info_fact']}</p>"
+            content += f'''
+            <div class="wiki-section" style="margin-top:60px; padding-top:40px; border-top:2px dashed #ddd;">
+                <h2 class="wiki-h2-visible" style="display: block !important; background: #f7f9fb; padding: 15px; border-left: 6px solid #333; font-size: 1.4em; font-weight: bold; margin-bottom: 20px; color: #333; line-height: 1.4;">{data['h2_title']}</h2>
+                <p style="margin-bottom:30px; font-weight:bold; line-height:1.8;">{data['h2_text']}</p>
+            '''
+            
+            # 豆知識（黄色い枠）
+            if data.get('fact_h3') and data.get('info_fact'):
+                content += f'''
+                <div style="margin-top:30px; border:2px solid #ff9f43; background:#fffcf0; padding:20px; border-radius:12px; position:relative;">
+                    <span style="position:absolute; top:-12px; left:20px; background:#ff9f43; color:#fff; padding:3px 12px; font-weight:bold; font-size:0.85em; border-radius:15px;">豆知識</span>
+                    <h3 style="margin-top:5px; font-size:1.1em;">{data['fact_h3']}</h3>
+                    <p style="margin-bottom:0; font-size:0.95em;">{data['info_fact']}</p>
+                </div>
+                '''
+            
+            content += '</div>'
 
         now = datetime.now()
         post_time = now - timedelta(hours=1)
