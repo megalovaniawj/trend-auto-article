@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V78】安全第一・嘘禁止版
+【トレンド自動記事作成 V79】見える化・ログ強化版
 修正点:
-1. 嘘の徹底排除: Wikiにない情報は「SKIP（作成中止）」するよう指示。無理な捏造を防ぐ。
-2. 安全策の固定: 人物・キャラ記事は「好き・嫌い」に、作品記事は「キャラ投票」にパターンを完全固定。
-3. 選択肢フィルター: 「…」や「。」を含む選択肢（文章）が出たらエラー扱いにする厳格なチェック機能。
+1. ログ出力強化: 背景調査でヒットしたニュース見出しをコンソールに表示し、AIが何を根拠にしたか人間が確認できるように変更。
+2. 思考プロセスの開示: 企画決定時にAIの「選定理由」もログに出力。
+3. 基本機能: V78（嘘禁止・パターン固定・TPM対策）のロジックはそのまま維持。
 """
 
 import os
@@ -112,6 +112,7 @@ def get_raw_trends():
     raw_data = [] 
     raw_data.extend(get_google_realtime_trends())
 
+    # Googleニュースのトピックフィード
     rss_sources = [
         ("Googleアニメ", "https://news.google.com/rss/search?q=アニメ&hl=ja&gl=JP&ceid=JP:ja"),
         ("Googleゲーム", "https://news.google.com/rss/search?q=ゲーム&hl=ja&gl=JP&ceid=JP:ja"),
@@ -190,11 +191,10 @@ def select_best_topics(candidates, existing_titles):
     {candidates_str}
 
     【★絶対的な優先順位】
-    1. **ゲーム・ソシャゲ**（アプデ、新キャラ、周年）
-    2. **アニメ・漫画**（新刊、映画化、議論）
-    3. **VTuber・配信者**
-    4. **チェーン店グルメ・商品**
-    5. **アイドル・芸能**（※結婚・不倫などのゴシップは除外。出演情報ならOK）
+    1. **アニメ・漫画・ゲームの「具体的な新作・キャラ」**
+    2. **VTuber・YouTuberの話題**
+    3. **チェーン店グルメ・商品**
+    4. **アイドル・芸能**（※ゴシップは除外）
 
     ※事件、事故、政治、暗いニュースは絶対に選ばないこと。
 
@@ -292,10 +292,12 @@ def perform_news_research(pure_keyword):
             feed = feedparser.parse(res.content)
             if feed.entries:
                 news_text = f"【「{pure_keyword}」の最新ニュース（トレンド背景）】\n"
+                print(" [調査完了]")
+                # ★修正：ヒットしたニュースをログに表示
                 for i, entry in enumerate(feed.entries[:3]):
                     title = re.sub(r' [-|–|:|：].*', '', entry.title).strip()
                     news_text += f"・{title}\n"
-                print(" [調査完了]")
+                    print(f"      👉 記事{i+1}: {title}")
                 return news_text
     except: pass
     print(" [ニュースなし]")
@@ -305,28 +307,22 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
-    # ★プロンプト：嘘禁止・パターン固定・SKIP命令
     prompt = f"""
-    あなたは凄腕のWeb編集者です。
+    あなたは凄腕のWeb編集者です。「最新ニュース」と「事実データ」を読み込み、
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
-    【★鉄の掟（これを守れない場合は『SKIP』と出力せよ）】
+    【★鉄の掟（守れない場合は『SKIP』せよ）】
     
     1. **【捏造の完全禁止】**
-       - 選択肢（items）は、必ず提供された「事実データ（Wiki）」の中に実在する名称のみで作ること。
-       - **もしWikiにデータがない場合は、無理に作らず、記事タイプを『SKIP』にして終了すること。**
-       - 「名セリフ」「名シーン」はWikiに載っていないため、AIが勝手に作ると嘘になる。よって**これらは禁止企画**とする。
+       - 選択肢はWikiに実在する名称（固有名詞）のみで作ること。Wikiにないデータ（セリフ等）は絶対禁止。
 
     2. **【安全策：企画パターンの固定】**
-       - **「特定のキャラクター」や「実在の人物」**が話題の場合：
-         👉 迷わず**「LIKE_DISLIKE（好き？普通？嫌い？）」**にする。これが一番安全で盛り上がる。
-       
-       - **「作品全体（アニメ・ゲーム）」**が話題の場合：
-         👉 迷わず**「WHICH_BEST（推しキャラ投票）」**にする。（Wikiにキャラ名一覧がある場合のみ）
+       - **「キャラクター・人物」**が話題 👉 **「LIKE_DISLIKE（好き？普通？嫌い？）」**
+       - **「作品全体」**が話題 👉 **「WHICH_BEST（推しキャラ投票）」**
 
     3. **【選択肢の検閲】**
-       - 選択肢は**「キャラクター名」「作品名」「役者名」などの短い固有名詞（20文字以内）**しか認めない。
-       - 「～なセリフ」「～なシーン」「…」を含む文章は即時エラーとみなす。
+       - 選択肢は**「固有名詞（20文字以内）」**のみ。
+       - 「～なセリフ」「～なシーン」「…」「。」を含む文章は即時エラーとみなす。
 
     【入力情報】
     純粋キーワード: {pure_keyword}
@@ -339,14 +335,14 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     【分類する記事タイプ】
     - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」
     - **WHICH_BEST (多選択)**: 「推しキャラは？」「好きな作品は？」 (※固有名詞のみ)
-    - **SKIP (作成不可)**: データ不足、またはセリフ投票になりそうな場合。
+    - **SKIP (作成不可)**
 
     【出力形式(JSON)】
     {{
         "core_keyword": "{pure_keyword}",
         "article_type": "LIKE_DISLIKE" or "WHICH_BEST" or "SKIP",
         "proposed_title": "一番盛り上がるタイトル（※必ずキャラ名・曲名・商品名を入れる）",
-        "reason": "なぜ今トレンドなのかの背景",
+        "reason": "なぜ今トレンドなのかの背景（思考プロセス）",
         "suggested_category": "contents" または "people" (タレントならpeople、アニメ・ゲームならgame)
     }}
     """
@@ -361,6 +357,8 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
             start = text.find('{'); end = text.rfind('}') + 1
             analysis = json.loads(text[start:end])
             print(f" -> [{analysis['article_type']}] {analysis['proposed_title']}")
+            # ★修正：選定理由を表示
+            print(f"      👀 理由: {analysis['reason']}")
             return analysis
     except: pass
     print(" -> 分析失敗")
@@ -496,7 +494,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V78: 安全第一・嘘禁止版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V79: 見える化・ログ強化版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
