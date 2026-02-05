@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V90】重複制御・完全構成版
+【トレンド自動記事作成 V91】最終完全版
 修正点:
-1. 重複制御の最適化:
-   - 「過去記事との重複チェック」を廃止（再実行時に同じネタでも書けるようにするため）。
-   - 「現在の実行内での重複チェック」を導入（1回の3記事作成では必ず別々のネタになるように）。
-2. 記事構成の物理配置:
-   - [上部] 投票システム
-   - [下部] ユーザー指定のHTMLブロック（wiki-section）に長文テキストを流し込む。
-3. その他: アフィリエイト削除、タイトル作品名必須、Wiki4000文字など仕様遵守。
+1. 最下部移動の実装: コンテンツ群を <div id="wiki-inject-container"> で囲み、サイトのJSでフォーム下に移動させる。
+2. コンテンツの完全化: 「導入文」+「選択肢の解説グリッド」+「豆知識」をすべてコンテナ内に記述。
+3. 重複ルールの変更: 過去記事との重複チェックを廃止（再実行時はOK）。1回の実行内での重複のみ禁止。
+4. その他: アフィリエイト削除、Wiki4000文字、タイトル作品名必須。
 """
 
 import os
@@ -70,7 +67,7 @@ def get_auth_header():
     return {'Authorization': f'Basic {token}'}
 
 def get_all_existing_titles():
-    # タイトル重複チェック用（過去記事の「タイトル」だけは被らないようにする）
+    # 記事作成直前の「完全一致」チェック用にのみ使用
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
     page = 1
@@ -172,12 +169,12 @@ def get_raw_trends():
     print(f" -> 有効候補: {len(cleaned_data)}件")
     return cleaned_data
 
-def select_best_topics(candidates, existing_titles):
+def select_best_topics(candidates):
     if not candidates: return []
     print("🤔 AI編集長が厳選中...", end="")
     
-    # ★修正：過去記事チェック（existing_titles）をここでは行わない。
-    # これにより、再実行時に「また同じテーマ」が出てきても選出されるようになる。
+    # ★修正：過去記事フィルタリングを廃止しました。
+    # 常に最新の候補から選定します。
     
     candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in candidates[:80]])
     
@@ -217,7 +214,7 @@ def select_best_topics(candidates, existing_titles):
                         break
     except: pass
     
-    # AI選出が少ない場合、候補リストから強制補充（3記事保証）
+    # 候補不足時の補充
     if len(final_selection) < ARTICLES_TO_CREATE:
         print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
         current_kws = [x['keyword'] for x in final_selection]
@@ -278,7 +275,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # 4000文字
+        # ★4000文字
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
@@ -497,13 +494,13 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V90: 重複制御・完全構成版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V91: 最終完全版) 開始...")
 
 success_count = 0
 processed_core_keywords = set() # 今回の実行における重複防止セット
 
 existing_titles = get_all_existing_titles()
-selected_items = select_best_topics(get_raw_trends(), existing_titles)
+selected_items = select_best_topics(get_raw_trends()) # 過去記事フィルタリング廃止
 
 if not selected_items:
     print("❌ ネタ切れ")
@@ -582,7 +579,7 @@ else:
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # ★HTML組み立て
+        # ★HTML組み立て（ここが最重要：最下部移動対応）
         content = ""
         
         # 1. 投票システム（上部）
@@ -603,7 +600,7 @@ else:
                 <p style="margin-bottom:30px; font-weight:bold; line-height:1.8;">{data['h2_text']}</p>
             '''
             
-            # 選択肢の解説グリッド
+            # ★選択肢の解説グリッド（復活）
             content += '<div style="display:grid; gap:20px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">'
             for item in data['items']:
                 content += f'''
