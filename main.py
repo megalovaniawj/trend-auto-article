@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V91】最終完全版
+【トレンド自動記事作成 V93】カスタムフィールド完全対応・最終版
 修正点:
-1. 最下部移動の実装: コンテンツ群を <div id="wiki-inject-container"> で囲み、サイトのJSでフォーム下に移動させる。
-2. コンテンツの完全化: 「導入文」+「選択肢の解説グリッド」+「豆知識」をすべてコンテナ内に記述。
-3. 重複ルールの変更: 過去記事との重複チェックを廃止（再実行時はOK）。1回の実行内での重複のみ禁止。
+1. コンテンツ出力先の変更: HTML直書きをやめ、WordPressのカスタムフィールド（meta）へデータを渡す方式に変更。
+   これにより、テーマ側のテンプレート機能で「フォームの下」に正しく表示されるようになる。
+2. ウソ防止安全策: Wikiデータ取得失敗時は、多選択（推し投票）から2択（好き嫌い）へ自動変更。
+3. 重複制御の最適化: 過去記事による候補除外を撤廃（次回実行時は同テーマも可）。今回の実行内での重複のみ禁止。
 4. その他: アフィリエイト削除、Wiki4000文字、タイトル作品名必須。
 """
 
@@ -30,7 +31,7 @@ except ImportError:
 warnings.filterwarnings("ignore")
 
 # ==========================================
-# ★設定エリア（GitHubシークレット）
+# ★設定エリア
 # ==========================================
 WP_URL = "https://docchiyo.com"
 WP_USER = "bear"
@@ -67,7 +68,7 @@ def get_auth_header():
     return {'Authorization': f'Basic {token}'}
 
 def get_all_existing_titles():
-    # 記事作成直前の「完全一致」チェック用にのみ使用
+    # 記事作成直前の「完全一致重複」を防ぐためだけに取得
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
     page = 1
@@ -173,8 +174,8 @@ def select_best_topics(candidates):
     if not candidates: return []
     print("🤔 AI編集長が厳選中...", end="")
     
-    # ★修正：過去記事フィルタリングを廃止しました。
-    # 常に最新の候補から選定します。
+    # ★重要: ここで過去記事チェックを行わない。
+    # これにより、次回実行時には同じテーマでも（トレンドなら）候補に挙がる。
     
     candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in candidates[:80]])
     
@@ -207,11 +208,13 @@ def select_best_topics(candidates):
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             selected_keywords = [x.strip() for x in re.split(r'[,\n、]', text) if x.strip()]
             
+            # 部分一致で柔軟に採用
             for kw in selected_keywords:
                 for item in candidates:
-                    if item['keyword'] == kw:
-                        final_selection.append(item)
-                        break
+                    if (item['keyword'] in kw) or (kw in item['keyword']):
+                        if item not in final_selection:
+                            final_selection.append(item)
+                        break 
     except: pass
     
     # 候補不足時の補充
@@ -247,7 +250,7 @@ def extract_pure_keyword(headline, raw_keyword):
             return pure_kw
     except: pass
     print(" -> 失敗（元のキーワードを使用）")
-    return raw_keyword
+    return "EXTRACT_FAILED"
 
 def perform_fact_check(pure_keyword):
     print(f"    🕵️‍♂️ ファクトチェック（Wikipedia公式から「{pure_keyword}」のデータを直接取得）...", end="")
@@ -275,7 +278,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # ★4000文字
+        # 4000文字
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
@@ -306,7 +309,6 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
-    # ★プロンプト：タイトルに【作品名】を強制
     prompt = f"""
     あなたは凄腕のWeb編集者です。
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
@@ -334,8 +336,8 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     {ai_fact_input}
 
     【分類する記事タイプ】
-    - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」
-    - **WHICH_BEST (多選択)**: 「推しは？」（選択肢は固有名詞のみ）
+    - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」「買う？買わない？」など。
+    - **WHICH_BEST (多選択)**: 「推しは？」（※Wikiにデータがない場合は選ばないこと！）
     - **SKIP (作成不可)**
 
     【出力形式(JSON)】
@@ -390,6 +392,8 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     print(f"🤖 記事執筆中 ({theme})...", end="")
     persona_instruction = get_comment_personas(10)
+    
+    # ★ウソ防止の安全策
     fact_instruction = ""
     if fact_check_data != "SEARCH_FAILED" and fact_check_data != "NO_SEARCH_MODULE":
         fact_instruction = f"""
@@ -494,10 +498,10 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V91: 最終完全版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V93: カスタムフィールド対応完全版) 開始...")
 
 success_count = 0
-processed_core_keywords = set() # 今回の実行における重複防止セット
+processed_core_keywords = set() # 今回の実行における重複防止用
 
 existing_titles = get_all_existing_titles()
 selected_items = select_best_topics(get_raw_trends()) # 過去記事フィルタリング廃止
@@ -514,6 +518,10 @@ else:
         
         # STEP1
         core_kw = extract_pure_keyword(item['headline'], item['keyword'])
+        
+        if core_kw == "EXTRACT_FAILED":
+             print(" -> ⚠️ キーワード抽出失敗のためスキップ")
+             continue
         
         # ★今回の実行内で既に扱ったテーマならスキップ
         if core_kw in processed_core_keywords:
@@ -532,14 +540,14 @@ else:
             print(" -> ⚠️ 投票化が難しいためスキップします。")
             continue
 
-        # 自動変換（検索失敗時）
+        # ★重要: 安全策（Wiki検索失敗時は、嘘を防ぐため「好き嫌い」に変更）
         if analysis_data['article_type'] == "WHICH_BEST" and fact_check_data == "SEARCH_FAILED":
             print(f" -> ⚠️検索失敗: 嘘を防ぐため「{analysis_data['core_keyword']}」の好感度調査（好き/嫌い）に変更します。")
             analysis_data['article_type'] = "LIKE_DISLIKE"
             analysis_data['proposed_title'] = f"【{analysis_data['core_keyword']}】好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
 
-        # TPM対策：休憩
+        # TPM対策
         print("☕ 制限回避のため10秒休憩中...", end="")
         time.sleep(10)
         print(" 再開")
@@ -547,7 +555,6 @@ else:
         data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
         if not data: continue
         
-        # タイトル完全一致チェック（これは維持）
         if data['title'] in existing_titles:
             print(" -> タイトル重複のためSKIP")
             continue
@@ -555,78 +562,56 @@ else:
         print(f"📝 作成決定: {data['title']}")
         
         items_str = []
-        # Metaにはデータのみ入れる
+        
+        # ★ここが最重要修正ポイント！
+        # コンテンツをHTML直書きではなく、カスタムフィールド(meta)に渡す
         meta = {
-            'post_views_count': '0'
+            'post_views_count': '0',
+            # 導入部分
+            'wiki_h2_title': data.get('h2_title', ''),
+            'wiki_h2_text': data.get('h2_text', ''),
+            # 豆知識（共通部分）
+            'wiki_fact_h3': data.get('fact_h3', ''),
+            'wiki_info_fact': data.get('info_fact', '')
         }
+        
         if data.get('comparison_table'): meta['wiki_comparison_table'] = data['comparison_table']
 
+        # 選択肢ごとの解説をMetaに登録（これでグリッド表示される）
         for i, item_choice in enumerate(data['items']):
             idx = i + 1
             if idx > 10: break
             name = item_choice['name']
+            
+            # 各選択肢のタイトルと解説文
             meta[f'wiki_info{idx}_h3'] = name
             meta[f'wiki_info_{idx}'] = item_choice.get('text', '')
+            
             meta[f'wiki_item_name_{idx}'] = name
-            meta[f'wiki_item_img_{idx}'] = ""
+            meta[f'wiki_item_img_{idx}'] = "" # 画像は空
+            
             votes = item_choice.get('votes', 0)
             if votes % 10 == 0: votes += random.randint(1, 9)
             meta[f'vote_multi_idx_{i}'] = str(votes)
+            
             if len(data['items']) == 2:
                 k = 'vote_count_a' if i == 0 else 'vote_count_b'
                 meta[k] = str(votes)
+            
             items_str.append(name)
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # ★HTML組み立て（ここが最重要：最下部移動対応）
+        # 本文には投票システムだけ入れる（余計なHTMLは書かない）
         content = ""
-        
-        # 1. 投票システム（上部）
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
             sc = f'[vote_bar items="{", ".join(items_str)}"]\n\n[vote_summary items="{", ".join(items_str)}"]'
-        content += sc
-
-        # 2. 下部コンテンツエリア（ID付きdivで囲む → JSで下に移動）
-        if data.get('h2_title') and data.get('h2_text'):
-            content += '<div id="wiki-inject-container" style="display:none;">'
-            
-            # メイン枠
-            content += f'''
-            <div class="wiki-section" style="margin-top:60px; padding-top:40px; border-top:2px dashed #ddd;">
-                <h2 class="wiki-h2-visible" style="display: block !important; background: #f7f9fb; padding: 15px; border-left: 6px solid #333; font-size: 1.4em; font-weight: bold; margin-bottom: 20px; color: #333; line-height: 1.4;">{data['h2_title']}</h2>
-                <p style="margin-bottom:30px; font-weight:bold; line-height:1.8;">{data['h2_text']}</p>
-            '''
-            
-            # ★選択肢の解説グリッド（復活）
-            content += '<div style="display:grid; gap:20px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">'
-            for item in data['items']:
-                content += f'''
-                <div style="background:#fff; border:1px solid #eee; padding:20px; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">
-                    <h3 style="margin:0 0 10px; font-size:1.1em; color:#333; border-bottom:2px solid #ff9f43; display:inline-block; padding-bottom:3px;">{item['name']}</h3>
-                    <p style="margin:0; font-size:0.95em; line-height:1.6; color:#555;">{item.get('text', '')}</p>
-                </div>
-                '''
-            content += '</div>'
-
-            # 豆知識（黄色い枠）
-            if data.get('fact_h3') and data.get('info_fact'):
-                content += f'''
-                <div style="margin-top:30px; border:2px solid #ff9f43; background:#fffcf0; padding:20px; border-radius:12px; position:relative;">
-                    <span style="position:absolute; top:-12px; left:20px; background:#ff9f43; color:#fff; padding:3px 12px; font-weight:bold; font-size:0.85em; border-radius:15px;">豆知識</span>
-                    <h3 style="margin-top:5px; font-size:1.1em;">{data['fact_h3']}</h3>
-                    <p style="margin-bottom:0; font-size:0.95em;">{data['info_fact']}</p>
-                </div>
-                '''
-            
-            content += '</div></div>' # 閉じタグ
+        content = sc
 
         now = datetime.now()
         post_time = now - timedelta(hours=1)
-        
-        # Slug短縮
         clean_slug = data.get('slug', 'post')
         
         post_data = {
