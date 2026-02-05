@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V79】見える化・ログ強化版
+【トレンド自動記事作成 V81】記事数確保＆レイアウト適正化版
 修正点:
-1. ログ出力強化: 背景調査でヒットしたニュース見出しをコンソールに表示し、AIが何を根拠にしたか人間が確認できるように変更。
-2. 思考プロセスの開示: 企画決定時にAIの「選定理由」もログに出力。
-3. 基本機能: V78（嘘禁止・パターン固定・TPM対策）のロジックはそのまま維持。
+1. 記事数保証: AI編集長が選んだネタが少ない場合、強制的に候補リストから補充して3記事以上を確保。
+2. レイアウト修正: 投票システムを記事最上部に配置し、導入文をその下に移動。
+3. タイトル修正: 「推し？」と「好き嫌い？」の混在を禁止し、日本語として自然な形に固定。
 """
 
 import os
@@ -112,7 +112,6 @@ def get_raw_trends():
     raw_data = [] 
     raw_data.extend(get_google_realtime_trends())
 
-    # Googleニュースのトピックフィード
     rss_sources = [
         ("Googleアニメ", "https://news.google.com/rss/search?q=アニメ&hl=ja&gl=JP&ceid=JP:ja"),
         ("Googleゲーム", "https://news.google.com/rss/search?q=ゲーム&hl=ja&gl=JP&ceid=JP:ja"),
@@ -180,7 +179,10 @@ def select_best_topics(candidates, existing_titles):
             if c['keyword'] in exist: is_duplicate = True; break
         if not is_duplicate: safe_candidates.append(c)
     
-    if len(safe_candidates) < 3: safe_candidates = candidates
+    # 候補が少なすぎる場合はそのまま返す
+    if len(safe_candidates) < 3:
+        print(f" (候補不足のため全採用)")
+        return safe_candidates
 
     candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in safe_candidates[:80]])
     
@@ -199,7 +201,7 @@ def select_best_topics(candidates, existing_titles):
     ※事件、事故、政治、暗いニュースは絶対に選ばないこと。
 
     【出力形式】
-    上位10個の「キーワード」のみをカンマ区切りで出力してください。
+    上位10個の「キーワード」のみをカンマ区切りで出力してください。必ず10個選ぶこと。
     """
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
@@ -220,11 +222,16 @@ def select_best_topics(candidates, existing_titles):
                         break
     except: pass
     
-    if not final_selection:
-        print("    ⚠️ AI選出エラー。上位候補を自動採用します。")
-        final_selection = safe_candidates[:10]
+    # ★修正：AIの選出が少ない場合、強制的にsafe_candidatesから補充する
+    if len(final_selection) < ARTICLES_TO_CREATE:
+        print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
+        current_kws = [x['keyword'] for x in final_selection]
+        for c in safe_candidates:
+            if c['keyword'] not in current_kws:
+                final_selection.append(c)
+                if len(final_selection) >= 10: break
     
-    print(f" -> 👑 選抜: {[item['keyword'] for item in final_selection]}")
+    print(f" -> 👑 選抜: {[item['keyword'] for item in final_selection[:5]]}...")
     return final_selection
 
 def extract_pure_keyword(headline, raw_keyword):
@@ -276,6 +283,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
+        # 4000文字維持
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
@@ -293,7 +301,6 @@ def perform_news_research(pure_keyword):
             if feed.entries:
                 news_text = f"【「{pure_keyword}」の最新ニュース（トレンド背景）】\n"
                 print(" [調査完了]")
-                # ★修正：ヒットしたニュースをログに表示
                 for i, entry in enumerate(feed.entries[:3]):
                     title = re.sub(r' [-|–|:|：].*', '', entry.title).strip()
                     news_text += f"・{title}\n"
@@ -307,22 +314,28 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
     print(f"    🧠 AIが100の成功事例を元に企画をメガ思考中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "情報なし"
     
+    # ★プロンプト修正：タイトル混合禁止
     prompt = f"""
-    あなたは凄腕のWeb編集者です。「最新ニュース」と「事実データ」を読み込み、
+    あなたは凄腕のWeb編集者です。
     一番盛り上がる「好き・嫌い・好み」の投票企画を【自分で考えて】ください。
 
-    【★鉄の掟（守れない場合は『SKIP』せよ）】
+    【★鉄の掟（守れない場合は『SKIP』）】
     
-    1. **【捏造の完全禁止】**
-       - 選択肢はWikiに実在する名称（固有名詞）のみで作ること。Wikiにないデータ（セリフ等）は絶対禁止。
+    1. **【タイトル生成テンプレート（混合禁止！）】**
+       - **WHICH_BESTの場合**: 必ず「【{pure_keyword}】（具体的なテーマ）は？推しは？」という形式にする。
+         ❌ダメな例：「Number_i、推しは？好き？嫌い？」（疑問文を混ぜるな）
+         ⭕️良い例：「Number_i、一番好きな曲は？」「Number_i、推しメンバーは？」
+       
+       - **LIKE_DISLIKEの場合**: 必ず「{pure_keyword}、好き？普通？嫌い？」という形式で固定する。
+         ❌ダメな例：「平野紫耀、推しは？好き？嫌い？」（意味不明）
+         ⭕️良い例：「平野紫耀、好き？普通？嫌い？」
 
-    2. **【安全策：企画パターンの固定】**
-       - **「キャラクター・人物」**が話題 👉 **「LIKE_DISLIKE（好き？普通？嫌い？）」**
-       - **「作品全体」**が話題 👉 **「WHICH_BEST（推しキャラ投票）」**
+    2. **【企画パターンの固定】**
+       - **「キャラクター・人物」** 👉 **「LIKE_DISLIKE（好感度投票）」**
+       - **「作品全体・グループ」** 👉 **「WHICH_BEST（推し投票）」**
 
-    3. **【選択肢の検閲】**
-       - 選択肢は**「固有名詞（20文字以内）」**のみ。
-       - 「～なセリフ」「～なシーン」「…」「。」を含む文章は即時エラーとみなす。
+    3. **【捏造の完全禁止】**
+       - 選択肢はWikiに実在する名称（固有名詞）のみ。セリフや文章は禁止。
 
     【入力情報】
     純粋キーワード: {pure_keyword}
@@ -334,16 +347,16 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
 
     【分類する記事タイプ】
     - **LIKE_DISLIKE (2択)**: 「好き？嫌い？」
-    - **WHICH_BEST (多選択)**: 「推しキャラは？」「好きな作品は？」 (※固有名詞のみ)
+    - **WHICH_BEST (多選択)**: 「推しは？」（選択肢は固有名詞のみ）
     - **SKIP (作成不可)**
 
     【出力形式(JSON)】
     {{
         "core_keyword": "{pure_keyword}",
         "article_type": "LIKE_DISLIKE" or "WHICH_BEST" or "SKIP",
-        "proposed_title": "一番盛り上がるタイトル（※必ずキャラ名・曲名・商品名を入れる）",
-        "reason": "なぜ今トレンドなのかの背景（思考プロセス）",
-        "suggested_category": "contents" または "people" (タレントならpeople、アニメ・ゲームならgame)
+        "proposed_title": "一番盛り上がるタイトル（※テンプレート厳守）",
+        "reason": "なぜ今トレンドなのかの背景",
+        "suggested_category": "contents" または "people"
     }}
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
@@ -357,7 +370,6 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data)
             start = text.find('{'); end = text.rfind('}') + 1
             analysis = json.loads(text[start:end])
             print(f" -> [{analysis['article_type']}] {analysis['proposed_title']}")
-            # ★修正：選定理由を表示
             print(f"      👀 理由: {analysis['reason']}")
             return analysis
     except: pass
@@ -412,7 +424,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         - タイトル: 「{title_idea}」
         - **【重要：選択肢（items）のルール】**
           1. **絶対に「作品名」「キャラ名」「役者名」などの固有名詞（20文字以内）のみにすること。**
-          2. **「セリフ」や「あらすじ」などの文章は禁止。もし思いつかない場合は記事作成を中止せよ。**
+          2. **「セリフ」や「あらすじ」は禁止。**
           3. 5〜10個列挙。「その他」も必須。
         - **解説文(text)**: その選択肢の魅力や背景を**200〜300文字程度**で深掘り解説すること。
         """
@@ -494,7 +506,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V79: 見える化・ログ強化版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V81: 記事数確保＆レイアウト適正化版) 開始...")
 
 success_count = 0
 existing_titles = get_all_existing_titles()
@@ -577,19 +589,20 @@ else:
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # HTML組み立て
+        # ★HTML組み立て（投票ファースト！）
         content = ""
-        # 1. 導入部
-        if data.get('h2_title') and data.get('h2_text'):
-            content += f"<h2>{data['h2_title']}</h2>"
-            content += f"<p>{data['h2_text']}</p><br>"
-
-        # 2. 投票システム
+        
+        # 1. 投票システム (最上部へ移動)
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
             sc = f'[vote_bar items="{", ".join(items_str)}"]\n\n[vote_summary items="{", ".join(items_str)}"]'
         content += sc
+
+        # 2. 導入部（その下）
+        if data.get('h2_title') and data.get('h2_text'):
+            content += f"\n\n<h2>{data['h2_title']}</h2>"
+            content += f"<p>{data['h2_text']}</p><br>"
 
         # 3. アフィリエイト
         if data.get('is_product'):
