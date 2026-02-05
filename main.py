@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V87】完全指示遵守・デザイン適用版
+【トレンド自動記事作成 V90】重複制御・完全構成版
 修正点:
-1. HTMLデザインの完全適用: 
-   - 記事下部に、ユーザー指定の「wiki-section（枠線付き）」と「豆知識（黄色い枠付き）」のHTML構造をそのまま再現し、そこにAIの長文テキストを流し込む。
-2. アフィリエイト削除: 不要な機能を完全撤去。
-3. Wiki読み込み量: 4000文字に設定。
-4. タイトル生成: キャラクター記事には必ず【作品名】を含めるよう厳格化。
+1. 重複制御の最適化:
+   - 「過去記事との重複チェック」を廃止（再実行時に同じネタでも書けるようにするため）。
+   - 「現在の実行内での重複チェック」を導入（1回の3記事作成では必ず別々のネタになるように）。
+2. 記事構成の物理配置:
+   - [上部] 投票システム
+   - [下部] ユーザー指定のHTMLブロック（wiki-section）に長文テキストを流し込む。
+3. その他: アフィリエイト削除、タイトル作品名必須、Wiki4000文字など仕様遵守。
 """
 
 import os
@@ -68,6 +70,7 @@ def get_auth_header():
     return {'Authorization': f'Basic {token}'}
 
 def get_all_existing_titles():
+    # タイトル重複チェック用（過去記事の「タイトル」だけは被らないようにする）
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
     page = 1
@@ -173,18 +176,10 @@ def select_best_topics(candidates, existing_titles):
     if not candidates: return []
     print("🤔 AI編集長が厳選中...", end="")
     
-    safe_candidates = []
-    for c in candidates:
-        is_duplicate = False
-        for exist in existing_titles[-50:]: 
-            if c['keyword'] in exist: is_duplicate = True; break
-        if not is_duplicate: safe_candidates.append(c)
+    # ★修正：過去記事チェック（existing_titles）をここでは行わない。
+    # これにより、再実行時に「また同じテーマ」が出てきても選出されるようになる。
     
-    if len(safe_candidates) < 3:
-        print(" (候補不足のため全採用)")
-        return safe_candidates
-
-    candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in safe_candidates[:80]])
+    candidates_str = "\n".join([f"- {c['keyword']}: {c['headline']}" for c in candidates[:80]])
     
     prompt = f"""
     Webメディア編集長として、以下のニュースリストを**「読者が熱狂的に投票したくなる順」にランキング化**し、上位10個を選んでください。
@@ -222,11 +217,11 @@ def select_best_topics(candidates, existing_titles):
                         break
     except: pass
     
-    # AI選出が少ない場合の強制補充（3記事保証）
+    # AI選出が少ない場合、候補リストから強制補充（3記事保証）
     if len(final_selection) < ARTICLES_TO_CREATE:
         print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
         current_kws = [x['keyword'] for x in final_selection]
-        for c in safe_candidates:
+        for c in candidates:
             if c['keyword'] not in current_kws:
                 final_selection.append(c)
                 if len(final_selection) >= 10: break
@@ -283,7 +278,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         
-        # ★Wiki読み込み量：4000文字に戻す
+        # 4000文字
         fact_text = f"【「{pure_keyword}」に関するWikipediaの事実データ】\n{extract[:4000]}"
         print(" [取得完了]")
         return fact_text
@@ -449,7 +444,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     【投票数】
     * ランダムな数値（例: 487, 123）
 
-    【★JSON形式】
+    【★JSON形式（slugは英語小文字とハイフンのみ。数字禁止）】
     {{
         "title": "タイトル",
         "slug": "short-english-slug",
@@ -502,9 +497,11 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V87: 完全指示遵守・デザイン適用版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V90: 重複制御・完全構成版) 開始...")
 
 success_count = 0
+processed_core_keywords = set() # 今回の実行における重複防止セット
+
 existing_titles = get_all_existing_titles()
 selected_items = select_best_topics(get_raw_trends(), existing_titles)
 
@@ -520,6 +517,13 @@ else:
         
         # STEP1
         core_kw = extract_pure_keyword(item['headline'], item['keyword'])
+        
+        # ★今回の実行内で既に扱ったテーマならスキップ
+        if core_kw in processed_core_keywords:
+            print(f" -> 🚫 重複テーマ（{core_kw}）のためスキップ")
+            continue
+        processed_core_keywords.add(core_kw)
+        
         # STEP2 (Wiki)
         fact_check_data = perform_fact_check(core_kw)
         # STEP3 (News)
@@ -546,6 +550,7 @@ else:
         data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
         if not data: continue
         
+        # タイトル完全一致チェック（これは維持）
         if data['title'] in existing_titles:
             print(" -> タイトル重複のためSKIP")
             continue
@@ -553,6 +558,7 @@ else:
         print(f"📝 作成決定: {data['title']}")
         
         items_str = []
+        # Metaにはデータのみ入れる
         meta = {
             'post_views_count': '0'
         }
@@ -576,24 +582,38 @@ else:
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
         
-        # ★HTML組み立て（ここが最重要：ユーザー指示通りの構成）
+        # ★HTML組み立て
         content = ""
         
-        # 1. 投票システム（最上部）
+        # 1. 投票システム（上部）
         if len(items_str) == 2:
             sc = f'[vote_bar name_a="{items_str[0]}" name_b="{items_str[1]}"]\n\n[vote_summary name_a="{items_str[0]}" name_b="{items_str[1]}"]'
         else:
             sc = f'[vote_bar items="{", ".join(items_str)}"]\n\n[vote_summary items="{", ".join(items_str)}"]'
         content += sc
 
-        # 2. 下部コンテンツエリア（HTML直書き・デザイン適用）
+        # 2. 下部コンテンツエリア（ID付きdivで囲む → JSで下に移動）
         if data.get('h2_title') and data.get('h2_text'):
+            content += '<div id="wiki-inject-container" style="display:none;">'
+            
+            # メイン枠
             content += f'''
             <div class="wiki-section" style="margin-top:60px; padding-top:40px; border-top:2px dashed #ddd;">
                 <h2 class="wiki-h2-visible" style="display: block !important; background: #f7f9fb; padding: 15px; border-left: 6px solid #333; font-size: 1.4em; font-weight: bold; margin-bottom: 20px; color: #333; line-height: 1.4;">{data['h2_title']}</h2>
                 <p style="margin-bottom:30px; font-weight:bold; line-height:1.8;">{data['h2_text']}</p>
             '''
             
+            # 選択肢の解説グリッド
+            content += '<div style="display:grid; gap:20px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">'
+            for item in data['items']:
+                content += f'''
+                <div style="background:#fff; border:1px solid #eee; padding:20px; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">
+                    <h3 style="margin:0 0 10px; font-size:1.1em; color:#333; border-bottom:2px solid #ff9f43; display:inline-block; padding-bottom:3px;">{item['name']}</h3>
+                    <p style="margin:0; font-size:0.95em; line-height:1.6; color:#555;">{item.get('text', '')}</p>
+                </div>
+                '''
+            content += '</div>'
+
             # 豆知識（黄色い枠）
             if data.get('fact_h3') and data.get('info_fact'):
                 content += f'''
@@ -604,7 +624,7 @@ else:
                 </div>
                 '''
             
-            content += '</div>'
+            content += '</div></div>' # 閉じタグ
 
         now = datetime.now()
         post_time = now - timedelta(hours=1)
