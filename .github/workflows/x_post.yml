@@ -34,10 +34,10 @@ jobs:
       # ★★★ ここが最重要！この記述がないと鍵が渡りません ★★★
       - name: 投稿スクリプトを実行
         env:
-          X_API_KEY: ${{ 5aBdDm28LUSxuxe2puyMjYXZZ }}
-          X_API_SECRET: ${{ XxsuMbrNliAKALzvSDPDWKOnwgJdvStHBbwzRydIrHOZG3w7jP }}
-          X_ACCESS_TOKEN: ${{ 2020047210755547136-NFzfRgJ1Z1HYupt3qsxLHyudWuTL4A }}
-          X_ACCESS_SECRET: ${{ 4Lbwjegb2ZEAL4d6aOqGfg39k140yBlgfARuoZ27UuLCX }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
         run: python x_observer.py
 
       - name: 投稿履歴(JSON)をGitHubに保存
