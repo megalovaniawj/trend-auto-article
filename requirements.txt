@@ -3,3 +3,4 @@ pandas
 feedparser
 beautifulsoup4
 icrawler
+tweepy
