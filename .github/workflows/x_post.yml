@@ -1,0 +1,48 @@
+name: X Auto Post
+
+on:
+  schedule:
+    # 日本時間 08:30 (UTC 23:30)
+    - cron: '30 23 * * *'
+    # 日本時間 12:00 (UTC 03:00)
+    - cron: '0 3 * * *'
+    # 日本時間 20:30 (UTC 11:30)
+    - cron: '30 11 * * *'
+  
+  # 手動実行ボタン
+  workflow_dispatch:
+
+jobs:
+  post-job:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 履歴ファイルを保存するために必須
+
+    steps:
+      - name: コードを取得
+        uses: actions/checkout@v3
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: ライブラリをインストール
+        run: pip install -r requirements.txt
+
+      - name: 投稿スクリプトを実行
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+        run: python x_observer.py
+
+      - name: 履歴(JSON)をGitHubに保存
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add x_post_history.json
+          # 変更がある場合のみコミット
+          git commit -m "履歴更新" || echo "変更なし"
+          git push
