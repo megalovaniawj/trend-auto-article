@@ -6,21 +6,29 @@ import requests
 import time
 from datetime import datetime, timedelta
 
+# ライブラリチェック
 try:
     import tweepy
 except ImportError:
     print("⚠️ エラー: 'tweepy' がインストールされていません。")
     sys.exit(1)
 
+# ==========================================
+# ★設定
+# ==========================================
 WP_URL = "https://docchiyo.com"
 HISTORY_FILE = "x_post_history.json"
 
 # GitHub ActionsのSecretsから読み込む
-    api_key = os.environ.get("5aBdDm28LUSxuxe2puyMjYXZZ")
-    api_secret = os.environ.get("XxsuMbrNliAKALzvSDPDWKOnwgJdvStHBbwzRydIrHOZG3w7jP")
-    access_token = os.environ.get("2020047210755547136-NFzfRgJ1Z1HYupt3qsxLHyudWuTL4A")
-    access_secret = os.environ.get("4Lbwjegb2ZEAL4d6aOqGfg39k140yBlgfARuoZ27UuLCX")
+# ※ここは行の先頭にスペースを入れないこと！
+X_API_KEY = os.environ.get("5aBdDm28LUSxuxe2puyMjYXZZ")
+X_API_SECRET = os.environ.get("XxsuMbrNliAKALzvSDPDWKOnwgJdvStHBbwzRydIrHOZG3w7jP")
+X_ACCESS_TOKEN = os.environ.get("2020047210755547136-NFzfRgJ1Z1HYupt3qsxLHyudWuTL4A")
+X_ACCESS_SECRET = os.environ.get("4Lbwjegb2ZEAL4d6aOqGfg39k140yBlgfARuoZ27UuLCX")
 
+# ==========================================
+# 関数
+# ==========================================
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return {}
@@ -35,6 +43,7 @@ def save_history(history):
         json.dump(history, f, indent=4, ensure_ascii=False)
 
 def clean_old_history(history):
+    """30日以上前の履歴を掃除する"""
     new_history = {}
     limit_date = datetime.now() - timedelta(days=30)
     for title, date_str in history.items():
@@ -46,7 +55,8 @@ def clean_old_history(history):
     return new_history
 
 def get_latest_posts(count=3):
-    print(f"📡 サイトから最新{count}件の記事を取得中...", end="")
+    """WordPressから最新記事を取得"""
+    print(f"📡 最新記事をチェック中...", end="")
     try:
         url = f"{WP_URL}/wp-json/wp/v2/posts?per_page={count}&_fields=title,link"
         res = requests.get(url, timeout=10)
@@ -60,6 +70,7 @@ def get_latest_posts(count=3):
         return []
 
 def extract_hashtags(title):
+    """タイトルからタグを生成"""
     tags = ["投票", "アンケート"]
     import re
     match = re.search(r'【(.*?)】', title)
@@ -68,8 +79,9 @@ def extract_hashtags(title):
     return " ".join([f"#{t}" for t in tags[:3]])
 
 def post_to_x(title, url):
+    """Xへ投稿実行"""
     if not all([X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET]):
-        print("⚠️ APIキー不足")
+        print("⚠️ APIキーが設定されていません")
         return False
 
     client = tweepy.Client(
@@ -90,26 +102,38 @@ def post_to_x(title, url):
         print(f"❌ 投稿失敗: {e}")
         return False
 
+# ==========================================
+# 実行メイン
+# ==========================================
 if __name__ == "__main__":
     print("--- X自動投稿チェック開始 ---")
+    
+    # 1. 履歴の準備
     history = load_history()
     history = clean_old_history(history)
+    
+    # 2. 記事の取得
     latest_posts = get_latest_posts(3)
     
-    posted = False
-    # 最新の記事からチェック
+    posted_count = 0
+    
+    # 3. 未投稿の記事を探して1つだけ投稿
     for post in latest_posts:
         title = post['title']['rendered']
         link = post['link']
         
+        # 履歴にあったらスキップ
         if title in history:
             continue
             
+        # 投稿実行
         if post_to_x(title, link):
             history[title] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            posted = True
-            break # 1回につき1記事だけ投稿して終了
+            posted_count += 1
+            break # 1つ投稿したら終了
     
+    # 4. 履歴を保存
     save_history(history)
-    if not posted:
-        print("新規投稿なし")
+    
+    if posted_count == 0:
+        print("💤 新しい記事はありませんでした（または全て投稿済み）")
