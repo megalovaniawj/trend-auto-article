@@ -6,7 +6,7 @@ import requests
 import time
 from datetime import datetime, timedelta
 
-# ライブラリチェック
+# Tweepyの読み込みチェック
 try:
     import tweepy
 except ImportError:
@@ -14,21 +14,34 @@ except ImportError:
     sys.exit(1)
 
 # ==========================================
-# ★設定
+# ★設定エリア
 # ==========================================
 WP_URL = "https://docchiyo.com"
 HISTORY_FILE = "x_post_history.json"
 
 # GitHub ActionsのSecretsから読み込む
-# ※ここは行の先頭にスペースを入れないこと！
-X_API_KEY = os.environ.get("5aBdDm28LUSxuxe2puyMjYXZZ")
-X_API_SECRET = os.environ.get("XxsuMbrNliAKALzvSDPDWKOnwgJdvStHBbwzRydIrHOZG3w7jP")
-X_ACCESS_TOKEN = os.environ.get("2020047210755547136-NFzfRgJ1Z1HYupt3qsxLHyudWuTL4A")
-X_ACCESS_SECRET = os.environ.get("4Lbwjegb2ZEAL4d6aOqGfg39k140yBlgfARuoZ27UuLCX")
+X_API_KEY = os.environ.get("X_API_KEY")
+X_API_SECRET = os.environ.get("X_API_SECRET")
+X_ACCESS_TOKEN = os.environ.get("X_ACCESS_TOKEN")
+X_ACCESS_SECRET = os.environ.get("X_ACCESS_SECRET")
 
 # ==========================================
-# 関数
+# 関数定義
 # ==========================================
+
+def check_env_vars():
+    """環境変数が正しく渡されているか確認する（中身は見せずに有無だけ表示）"""
+    print("\n🔑 認証情報のチェック:")
+    print(f"  - API_KEY: {'OK' if X_API_KEY else '❌ 未設定'}")
+    print(f"  - API_SECRET: {'OK' if X_API_SECRET else '❌ 未設定'}")
+    print(f"  - ACCESS_TOKEN: {'OK' if X_ACCESS_TOKEN else '❌ 未設定'}")
+    print(f"  - ACCESS_SECRET: {'OK' if X_ACCESS_SECRET else '❌ 未設定'}")
+    
+    if not all([X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET]):
+        print("\n⚠️ エラー: GitHub ActionsのYAMLファイルで 'env:' の設定が漏れている可能性があります。")
+        return False
+    return True
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return {}
@@ -55,7 +68,6 @@ def clean_old_history(history):
     return new_history
 
 def get_latest_posts(count=3):
-    """WordPressから最新記事を取得"""
     print(f"📡 最新記事をチェック中...", end="")
     try:
         url = f"{WP_URL}/wp-json/wp/v2/posts?per_page={count}&_fields=title,link"
@@ -65,12 +77,13 @@ def get_latest_posts(count=3):
             print(f" OK ({len(posts)}件)")
             return posts
         else:
+            print(" 失敗")
             return []
-    except:
+    except Exception as e:
+        print(f" エラー: {e}")
         return []
 
 def extract_hashtags(title):
-    """タイトルからタグを生成"""
     tags = ["投票", "アンケート"]
     import re
     match = re.search(r'【(.*?)】', title)
@@ -80,10 +93,6 @@ def extract_hashtags(title):
 
 def post_to_x(title, url):
     """Xへ投稿実行"""
-    if not all([X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET]):
-        print("⚠️ APIキーが設定されていません")
-        return False
-
     client = tweepy.Client(
         consumer_key=X_API_KEY,
         consumer_secret=X_API_SECRET,
@@ -103,36 +112,42 @@ def post_to_x(title, url):
         return False
 
 # ==========================================
-# 実行メイン
+# メイン処理
 # ==========================================
 if __name__ == "__main__":
     print("--- X自動投稿チェック開始 ---")
     
-    # 1. 履歴の準備
+    # 1. 鍵のチェック
+    if not check_env_vars():
+        sys.exit(1) # 鍵がないなら強制終了
+
+    # 2. 履歴の準備
     history = load_history()
     history = clean_old_history(history)
     
-    # 2. 記事の取得
+    # 3. 記事の取得
     latest_posts = get_latest_posts(3)
     
     posted_count = 0
     
-    # 3. 未投稿の記事を探して1つだけ投稿
+    # 4. 未投稿の記事を探して投稿
     for post in latest_posts:
         title = post['title']['rendered']
         link = post['link']
         
         # 履歴にあったらスキップ
         if title in history:
+            print(f"⏭️ スキップ（済）: {title}")
             continue
             
         # 投稿実行
+        print(f"🚀 投稿を試みます: {title}")
         if post_to_x(title, link):
             history[title] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             posted_count += 1
-            break # 1つ投稿したら終了
+            break # 1回につき1記事だけ投稿して終了
     
-    # 4. 履歴を保存
+    # 5. 履歴を保存
     save_history(history)
     
     if posted_count == 0:
