@@ -27,8 +27,6 @@ jobs:
 
     - name: Run Hunter Script
       env:
-        # WordPressの接続情報だけはセキュリティのためSecretsから読み込みます
-        WP_URL: ${{ secrets.WP_URL }}
-        WP_USER: ${{ secrets.WP_USER }}
+        # パスワードだけSecretsから安全に読み込みます
         WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
       run: python auto_hunter.py
