@@ -14,7 +14,7 @@ WP_URL = os.environ.get("WP_URL", "https://docchiyo.com")
 WP_USER = os.environ.get("WP_USER", "bear")
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 
-# ▼ 修正：いただいたDiscord Webhook URLをセットしました
+# Discord Webhook URL
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
 # PR TIMES RSS
@@ -87,7 +87,6 @@ def extract_release_str(text):
     
     return "リリース時期未定"
 
-# DiscordへWebhookを送信する関数
 def send_discord_notification(title, release_str, status_type):
     if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "ここにDiscordのWebhook URLを貼り付けてください":
         print("⚠️ Discord Webhook URLが未設定のため通知をスキップしました")
@@ -237,13 +236,21 @@ def main():
     count = 0
     for entry in feed.entries:
         title = entry.title
-        if not any(w in title for w in TARGET_WORDS): continue
-        if any(w in title for w in NG_WORDS): continue
+        
+        # ▼改良：なぜスキップしたか理由を出力する
+        if not any(w in title for w in TARGET_WORDS):
+            print(f"➖ スキップ(対象ワードなし): {title}")
+            continue
+        if any(w in title for w in NG_WORDS):
+            print(f"➖ スキップ(NGワードあり): {title}")
+            continue
         
         clean_title_check = re.sub(r'【.*?】', '', title).split("」")[0].replace("「", "")
         wp_check_title = f"【投票】{clean_title_check}は面白い？プレイ前の期待度アンケート"
         
-        if check_exists(wp_check_title): continue
+        if check_exists(wp_check_title):
+            print(f"💨 スキップ(作成済み): {clean_title_check}")
+            continue
 
         print(f"🆕 ターゲット発見: {title}")
         pid, sakura, clean_title, status = create_post(entry)
