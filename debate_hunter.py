@@ -82,7 +82,6 @@ def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
     
-    # 検索ヒット率を上げるため、特徴的な単語のみで検索
     clean_title = clean_text(title)
     keywords = re.findall(r'[a-zA-Z0-9]+|[ァ-ンー]{3,}', clean_title)
     if keywords:
@@ -103,7 +102,7 @@ def check_exists(title):
                     try:
                         post_date = datetime.fromisoformat(post['date'])
                         diff = datetime.now() - post_date
-                        if diff.days < 30: # 30日以内なら重複とみなす
+                        if diff.days < 30: 
                             print(f" -> 🛑 あり ({diff.days}日前): {post['title']['rendered'][:10]}...")
                             return True
                     except: pass
@@ -123,13 +122,15 @@ def check_exists(title):
 def get_trends():
     print("📈 トレンド収集中...", end="")
     items = []
+    
+    # Google Trends: 取得数を3→10に増加
     try:
         url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=all&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
         res = requests.get(url, headers=HEADERS, timeout=10)
         if res.status_code == 200:
             data = json.loads(res.text.replace(")]}',", "").strip())
             stories = data.get('storySummaries', {}).get('trendingStories', [])
-            for story in stories[:3]:
+            for story in stories[:10]: # ★増加
                 title = story.get('title')
                 articles = story.get('articles', [])
                 desc = articles[0].get('snippet', '') if articles else ""
@@ -138,14 +139,16 @@ def get_trends():
                     items.append({"title": title, "desc": desc, "link": link})
     except: pass
 
+    # RSS: 取得数を2→5に増加
     for url in RSS_URLS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:2]: 
+            for entry in feed.entries[:5]: # ★増加
                 title = clean_text(entry.title)
                 if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
                     items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
         except: pass
+        
     print(f" OK ({len(items)}件)")
     return items
 
@@ -306,7 +309,6 @@ def post_to_wordpress(ai_data):
 
     items_str = ",".join([f"{item['name']}|" for item in items])
     
-    # ★修正: 定型文を削除し、投票バーとサマリーのみにする
     content = f"""
 [vote_bar items="{items_str}"]
 [vote_summary items="{items_str}"]
@@ -400,7 +402,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v52 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v53 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
