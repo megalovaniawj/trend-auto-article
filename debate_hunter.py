@@ -13,8 +13,19 @@ from datetime import datetime, timedelta
 # ==========================================
 # ★設定エリア
 # ==========================================
-WP_URL = os.environ.get("WP_URL", "https://docchiyo.com")
-WP_USER = os.environ.get("WP_USER", "bear")
+# 環境変数が空の場合のバックアップ値を設定
+WP_URL_DEFAULT = "https://docchiyo.com"
+WP_USER_DEFAULT = "bear"
+
+# 環境変数を取得し、空ならデフォルト値を使用
+WP_URL = os.environ.get("WP_URL")
+if not WP_URL:
+    WP_URL = WP_URL_DEFAULT
+
+WP_USER = os.environ.get("WP_USER")
+if not WP_USER:
+    WP_USER = WP_USER_DEFAULT
+
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -26,7 +37,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定 (main.pyと同じ実績のあるモデルに戻しました)
+# ★モデル設定
 MODEL_NAME = "gemma-3-27b-it" 
 
 # ★カテゴリーID設定
@@ -328,7 +339,7 @@ def post_to_wordpress(ai_data):
             print(" 完了")
             return True
         else:
-            print(f"   ❌ WP投稿失敗: {res.status_code}")
+            print(f"   ❌ WP投稿失敗: {res.status_code} {res.text}")
     except Exception as e:
         print(f"   ❌ エラー: {e}")
     return False
@@ -337,7 +348,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v37 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v38 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -357,7 +368,6 @@ def main():
                 try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
                 except: pass
                 
-        # Gemma 3なら15秒待機で十分
         print("   ☕ 休憩中(15s)...")
         time.sleep(15)
 
