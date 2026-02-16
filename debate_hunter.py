@@ -77,16 +77,41 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+# ★修正: 30日以内の重複チェック機能
 def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
-    clean_search = clean_text(title)[:15]
-    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={clean_search}&status=any"
+    
+    # 検索精度向上のため20文字まで使用
+    clean_search = clean_text(title)[:20]
+    
+    # ステータスは公開・下書き問わずチェック、最新1件を取得
+    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={clean_search}&status=any&per_page=1"
+    
     try:
         res = requests.get(endpoint, headers=headers, timeout=10)
         if res.status_code == 200:
-            for post in res.json():
-                if clean_search in post['title']['rendered']:
+            posts = res.json()
+            if posts:
+                last_post = posts[0]
+                
+                # 記事の日付を取得 (例: 2026-02-14T12:00:00)
+                post_date_str = last_post['date']
+                try:
+                    post_date = datetime.fromisoformat(post_date_str)
+                    
+                    # 現在時刻との差分を計算
+                    diff = datetime.now() - post_date
+                    
+                    # 30日未満なら重複とみなす
+                    if diff.days < 30:
+                        print(f"   🛑 直近30日以内に類似記事あり ({diff.days}日前): {last_post['title']['rendered']}")
+                        return True
+                    else:
+                        print(f"   🟢 類似記事ありだが古い ({diff.days}日前) ため作成: {last_post['title']['rendered']}")
+                        return False
+                except:
+                    # 日付パースエラー等の場合は念のため重複扱いにする
                     return True
     except: pass
     return False
@@ -161,8 +186,20 @@ def generate_article_plan(item):
     【コメント生成指示】
     この記事に対する「読者の反応」を5件生成せよ。以下の人格確率に基づいて演じ分けること。
     出力はJSONの `comments` 配列に格納すること。
-    - **主要人格**: 普通、丁寧、雑・男言葉、感情的、弱気
-    - **レア人格**: ネットスラング、関西弁、オタク、ギャル、一言
+
+    - **主要人格 (計80%)**:
+      1. 普通: 「〜だね」「〜だと思う」
+      2. 丁寧: 「〜ですね」「〜素晴らしいです」
+      3. 雑・男言葉: 「〜だろ」「〜じゃね？」
+      4. 感情的: 「〜すぎ！」「マジで！？」
+      5. 弱気: 「〜かな？」「〜自信ないけど」
+    
+    - **レア人格 (計20%)**:
+      1. ネットスラング: 「草」「それな」「わかりみが深い」
+      2. 関西弁: 「〜やな」「せやね」「なんでやねん」
+      3. オタク: 「尊い…」「〜なんだよなぁ」「解釈一致」
+      4. ギャル: 「神」「ビジュ良すぎ」「優勝」
+      5. 一言: 「これ。」「はい。」「微妙。」
     """
 
     prompt = f"""
@@ -175,17 +212,16 @@ def generate_article_plan(item):
     【★企画ルール：厳守】
     
     1. **タイトル (title)**: 
-       - 「ニュースの事実」＋「問いかけ」の形。
-       - 例: 「〇〇がついに発売！買う？見送る？」
-       - 例: 「〇〇の△△発言が物議。これは正論？暴言？」
+       - **「具体的なニュース事実」＋「短い問いかけ」**
+       - 良い例: 「画面端でポーカー！？『Card Corner』3月9日Steamリリース！あなたは体験版をプレイする？」
+       - 良い例: 「〇〇が△△とコラボ決定！この組み合わせ、アリ？ナシ？」
 
     2. **記事本文 (h2_text)**:
-       - **ここに記事のメインコンテンツ（題材の詳細）を全て記述してください。**
-       - ニュースの背景、スペック、価格、何がすごいのか、なぜ話題なのかを、読者が判断できるように詳しく（400〜500文字）解説してください。
-       - **選択肢の解説欄を使わない分、この本文を充実させることが必須です。**
+       - **ここに「議題の特徴・詳細」を全て記述してください。**
+       - 選択肢の説明欄を使わないため、この本文だけで読者が内容（スペック、価格、魅力、何がすごいのか）を理解できるように、400文字程度で詳しく解説してください。
 
     3. **選択肢 (items)**: 
-       - `name`: 選択肢の名前（例：「買う」「買わない」「あり」「なし」）
+       - `name`: 選択肢の名前（例：「プレイする」「スルー」「あり」「なし」）
        - `text`: **必ず空文字 ("") にしてください。** 解説は不要です。
 
     4. **コメント (comments)**:
@@ -196,12 +232,12 @@ def generate_article_plan(item):
       "category": "social/food/tech/anime/entame/game のいずれか",
       "title": "ニュース事実＋問いかけ",
       "h2_title": "導入見出し",
-      "h2_text": "ニュース詳細を含む充実した本文(400字以上)",
+      "h2_text": "ニュース詳細・特徴を含む充実した本文(400字以上)",
       "fact_h3": "豆知識見出し",
       "fact_text": "Wiki情報を活用した豆知識(200字程度)",
       "items": [
-        {{ "name": "選択肢1", "text": "" }},
-        {{ "name": "選択肢2", "text": "" }}
+        {{ "name": "選択肢1(短く)", "text": "" }},
+        {{ "name": "選択肢2(短く)", "text": "" }}
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -258,7 +294,6 @@ def post_comment_to_wp(pid, name, content):
         if res.status_code == 201:
             return True, ""
         else:
-            # エラー詳細を返す（デバッグ用）
             return False, f"{res.status_code} {res.text}"
     except Exception as e:
         return False, str(e)
@@ -300,7 +335,7 @@ def post_to_wordpress(ai_data):
         meta[f'wiki_item_name_{idx}'] = item['name']
         meta[f'wiki_item_img_{idx}'] = ""
         meta[f'wiki_info{idx}_h3'] = item['name']
-        meta[f'wiki_info_{idx}'] = "" # ★強制的に空文字にする（解説削除）
+        meta[f'wiki_info_{idx}'] = "" # ★強制空文字
         
     weights = [50, 30, 10, 5, 5] + [1] * 5
     for _ in range(total_sakura):
@@ -317,7 +352,7 @@ def post_to_wordpress(ai_data):
     post_data = {
         'title': wp_title,
         'content': content,
-        'status': 'publish', # ★【重要】publishに変更（これでコメントが入る）
+        'status': 'publish', # 公開状態で投稿
         'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
         'categories': [cat_id],
         'meta': meta
@@ -333,8 +368,6 @@ def post_to_wordpress(ai_data):
             print("   💬 コメント投稿中...", end="")
             
             comments_list = ai_data.get('comments', [])
-            
-            # AIがコメントを空で返してきた場合のバックアップ
             if not comments_list:
                 comments_list = [
                     {"name": "匿名", "content": "これは気になる！"},
@@ -357,9 +390,9 @@ def post_to_wordpress(ai_data):
                     success, msg = post_comment_to_wp(pid, c_name, c_content)
                     if success:
                         success_c += 1
-                        print(f"[OK]", end="")
+                        print(f" [OK]", end="")
                     else:
-                        print(f"[NG:{msg}]", end="")
+                        print(f" [NG:{msg}]", end="")
                     time.sleep(1) 
             
             print(f" -> 完了 ({success_c}件)")
@@ -374,7 +407,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v43 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v46 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -383,15 +416,17 @@ def main():
     for item in candidates:
         if count >= 3: break
         
+        # タイトルで重複チェック (30日以内)
         if check_exists(item['title']):
-            print(f"🔷 済: {item['title'][:20]}...")
             continue
             
         ai_data = generate_article_plan(item)
         if ai_data:
             if post_to_wordpress(ai_data):
                 count += 1
-                try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
+                try: 
+                    msg = f"🆕 記事作成: {ai_data['title']}\n{WP_URL}/wp-admin/"
+                    requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
                 except: pass
                 
         print("   ☕ 休憩中(15s)...")
