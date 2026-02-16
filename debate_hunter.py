@@ -77,38 +77,53 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# 重複チェック機能
+# ★重複チェック機能 (賢い検索版)
 def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
     
-    clean_search = clean_text(title)
-    if len(clean_search) > 50:
-        clean_search = clean_search[:50] 
+    clean_title = clean_text(title)
+    
+    # 戦略: タイトルから「カタカナ」や「英数字」の長い単語を抽出して検索する
+    # 例: "Card Corner 発売" -> "Card Corner" で検索
+    # これにより、表記ゆれがあってもヒットしやすくする
+    keywords = re.findall(r'[a-zA-Z0-9]+|[ァ-ンー]{3,}', clean_title)
+    
+    # キーワードが見つかれば一番長いのを使う、なければ先頭15文字
+    if keywords:
+        search_query = max(keywords, key=len)
+    else:
+        search_query = clean_title[:15]
 
-    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={clean_search}&status=any&per_page=5"
+    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={search_query}&status=any&per_page=5"
+    
+    print(f"   🔍 重複チェック: '{search_query}' で検索...", end="")
     
     try:
         res = requests.get(endpoint, headers=headers, timeout=10)
         if res.status_code == 200:
             posts = res.json()
             if posts:
+                # ヒットした記事の中に、30日以内のものがあるかチェック
                 for post in posts:
-                    post_date_str = post['date']
                     try:
-                        post_date = datetime.fromisoformat(post_date_str)
+                        post_date = datetime.fromisoformat(post['date'])
                         diff = datetime.now() - post_date
                         
-                        # 3日以内に似た記事があればスキップ
-                        if diff.days < 3:
-                            print(f"   🛑 直近重複あり ({diff.days}日前): {post['title']['rendered'][:20]}...")
+                        # 30日以内なら重複とみなす
+                        if diff.days < 30:
+                            print(f" -> 🛑 あり ({diff.days}日前): {post['title']['rendered'][:10]}...")
                             return True
-                    except:
-                        return True
+                    except: pass
                 
-                print(f"   🟢 類似記事はあるが古いので作成許可")
+                print(f" -> 🟢 古いのでOK")
                 return False
-    except: pass
+            else:
+                print(" -> 🟢 なし")
+                return False
+    except Exception as e:
+        print(f" -> ⚠️ エラー: {e}")
+        pass
     return False
 
 # --- 1. トレンド収集 ---
@@ -177,39 +192,18 @@ def generate_article_plan(item):
     
     context_text = f"ニュース: {item['title']}\n概要: {item['desc']}\n詳細: {web_desc}\nWiki: {wiki_data}"
 
-    # ★人格設定（極厚版）
     persona_prompt = """
     【コメント生成指示】
     この記事に対する「読者のリアルな書き込み」を5件生成し、JSONの `comments` 配列に格納せよ。
-    以下の5人の異なるキャラクターになりきって、文体・語彙・テンションを完全に演じ分けること。
+    以下の5人の異なるキャラクターになりきること。
 
-    1. **熱狂的な信者 (Fanboy)**:
-       - 非常に興奮しており、ポジティブな言葉しか使わない。
-       - 特徴: ビックリマーク多用、短文。「神」「最高」「待ってた」
-       - 例: 「うおおおおお！マジかこれ！」「絶対買うわ」「覇権確定だろ」
-
-    2. **冷笑的なネット民 (Cynic)**:
-       - 斜に構えており、批判的または冷ややかな態度。
-       - 特徴: ネットスラング（草、〇〇乙）、体言止め。「解散」「はいはい」「微妙」
-       - 例: 「今更感すごいなw」「値段高すぎ、誰が買うの？」「爆死の予感しかしない」
-
-    3. **慎重な分析家 (Analyst)**:
-       - 感情に流されず、スペックやコスパを気にする。
-       - 特徴: 落ち着いた口調、「〜かな」「〜次第」。長文傾向。
-       - 例: 「スペック的には悪くないけど、実機レビュー待ちかな。」「この価格ならアリかも。」
-
-    4. **無知な初心者 (Newbie)**:
-       - ニュースの内容をよく理解していない、または純粋な疑問。
-       - 特徴: 質問系、「〜なの？」。弱気。
-       - 例: 「これって前作やってなくても楽しめる？」「スマホ版は出ないのかな？」
-
-    5. **通りすがりの一般人 (Normal)**:
-       - 特に強い関心はないが、話題だから反応した程度。
-       - 特徴: 普通の丁寧語、または軽い口語。「へー」「〜なんだ」。
-       - 例: 「話題になってるから気になってた。」「面白そうですね。」
-
-    **重要:** - 全員が同じような「〜ですね」口調にならないように注意せよ。
-    - 掲示板やSNSのタイムラインのような「生きた言葉」を使うこと。
+    1. **熱狂的な信者**: ビックリマーク多用、ポジティブ。「神」「最高」「待ってた」
+    2. **冷笑的なネット民**: 斜に構えた態度、ネットスラング。「草」「微妙」「解散」
+    3. **慎重な分析家**: スペックやコスパを気にする。「〜かな」「〜次第」「レビュー待ち」
+    4. **無知な初心者**: 純粋な疑問。「これ何？」「面白そう」「誰か教えて」
+    5. **通りすがりの一般人**: 普通の反応。「へー」「話題だね」
+    
+    ※口調は自然な日本語で、掲示板のような短文を心がけること。
     """
 
     prompt = f"""
@@ -222,20 +216,19 @@ def generate_article_plan(item):
     【★企画ルール：厳守】
     
     1. **タイトル (title)**: 
-       - **「具体的なニュース事実」＋「短い問いかけ」**
-       - 良い例: 「画面端でポーカー！？『Card Corner』3月9日Steamリリース！あなたは体験版をプレイする？」
-       - 良い例: 「〇〇が△△とコラボ決定！この組み合わせ、アリ？ナシ？」
+       - **「具体的なニュース事実」＋「短い問いかけ」** の形式。
+       - 例: 「〇〇が発売！あなたは買う？見送る？」
 
     2. **記事本文 (h2_text)**:
        - **ここに「議題の特徴・詳細」を全て記述してください。**
-       - 選択肢の説明欄を使わないため、この本文だけで読者が内容（スペック、価格、魅力、何がすごいのか）を理解できるように、400文字程度で詳しく解説してください。
+       - 選択肢の説明欄を使わないため、この本文だけで読者が内容を理解できるように、400文字程度で詳しく解説してください。
 
     3. **選択肢 (items)**: 
        - `name`: 選択肢の名前（例：「プレイする」「スルー」「あり」「なし」）
-       - `text`: **ここには絶対に文字を入れないでください。空文字 ("") にしてください。** - 解説文を入れるとレイアウトが崩れます。
+       - **重要: `text` (解説) フィールドは出力しないでください。名前だけでOKです。**
 
     4. **コメント (comments)**:
-       - 上記の「コメント生成指示」に従い、5つの異なる視点のコメントを生成してください。
+       - 5つの異なる視点のコメントを生成してください。
 
     【出力形式(JSONのみ)】
     {{
@@ -246,8 +239,8 @@ def generate_article_plan(item):
       "fact_h3": "豆知識見出し",
       "fact_text": "豆知識(Wikiがない場合は空文字)",
       "items": [
-        {{ "name": "選択肢1(短く)", "text": "" }},  // ← textは必ず空にすること！
-        {{ "name": "選択肢2(短く)", "text": "" }}   // ← textは必ず空にすること！
+        {{ "name": "選択肢1(短く)" }}, 
+        {{ "name": "選択肢2(短く)" }}
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -345,7 +338,8 @@ def post_to_wordpress(ai_data):
         meta[f'wiki_item_name_{idx}'] = item['name']
         meta[f'wiki_item_img_{idx}'] = ""
         meta[f'wiki_info{idx}_h3'] = item['name']
-        meta[f'wiki_info_{idx}'] = "" # ★強制空文字
+        # ★ textキー自体をAIから要求していないため、ここは完全に空文字固定
+        meta[f'wiki_info_{idx}'] = "" 
         
     weights = [50, 30, 10, 5, 5] + [1] * 5
     for _ in range(total_sakura):
@@ -417,7 +411,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v49 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v51 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -426,7 +420,7 @@ def main():
     for item in candidates:
         if count >= 3: break
         
-        # タイトルで重複チェック
+        # タイトル重複チェック
         if check_exists(item['title']):
             continue
             
