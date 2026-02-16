@@ -48,14 +48,16 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
 ]
 
+# ★RSSリスト
 RSS_URLS = [
-    "https://news.yahoo.co.jp/rss/topics/dom.xml",
-    "https://news.yahoo.co.jp/rss/topics/ent.xml",
-    "https://news.livedoor.com/topics/rss/dom.xml",
-    "https://www.4gamer.net/rss/index.xml",
-    "https://rocketnews24.com/feed/",
-    "https://feeds.cinematoday.jp/cinematoday/rss",
-    "https://mantan-web.jp/rss/rss.xml"
+    "https://news.yahoo.co.jp/rss/topics/dom.xml",   # 社会
+    "https://news.yahoo.co.jp/rss/topics/it.xml",    # IT
+    "https://news.yahoo.co.jp/rss/topics/ent.xml",   # エンタメ
+    "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml", # IT/ビジネス
+    "https://entabe.jp/news.rss",                    # グルメ
+    "https://rocketnews24.com/feed/",                # 雑多・グルメ
+    "https://www.businessinsider.jp/feed/index.xml", # ビジネス・社会
+    "https://www.4gamer.net/rss/index.xml"           # ゲーム
 ]
 
 NG_WORDS = ["セール", "決算", "インタビュー", "レポート", "舞台", "オーディション", "求人", "人事", "放送", "プレゼント", "まとめ", "訃報", "死去", "ご冥福", "亡く", "逝去"]
@@ -123,14 +125,14 @@ def get_trends():
     print("📈 トレンド収集中...", end="")
     items = []
     
-    # Google Trends: 取得数を3→10に増加
+    # Google Trends
     try:
         url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=all&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
         res = requests.get(url, headers=HEADERS, timeout=10)
         if res.status_code == 200:
             data = json.loads(res.text.replace(")]}',", "").strip())
             stories = data.get('storySummaries', {}).get('trendingStories', [])
-            for story in stories[:10]: # ★増加
+            for story in stories[:10]:
                 title = story.get('title')
                 articles = story.get('articles', [])
                 desc = articles[0].get('snippet', '') if articles else ""
@@ -139,11 +141,14 @@ def get_trends():
                     items.append({"title": title, "desc": desc, "link": link})
     except: pass
 
-    # RSS: 取得数を2→5に増加
-    for url in RSS_URLS:
+    # RSS (★ここをランダム順に変更)
+    shuffled_rss = RSS_URLS.copy()
+    random.shuffle(shuffled_rss) # 毎回リストの中身をシャッフル
+
+    for url in shuffled_rss:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:5]: # ★増加
+            for entry in feed.entries[:5]: 
                 title = clean_text(entry.title)
                 if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
                     items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
@@ -210,14 +215,17 @@ def generate_article_plan(item):
     
     1. **タイトル (title)**: 
        - 「具体的なニュース事実」＋「短い問いかけ」
-       - 例: 「〇〇が発売！あなたは買う？見送る？」
 
     2. **記事本文 (h2_text)**:
        - **ここに「議題のコンテンツ（詳細）」を全て記述してください。**
-       - 選択肢の欄には何も書かないため、この本文だけで読者が内容（スペック、価格、魅力、背景）を完全に理解できるように、400文字程度で詳しく解説してください。
+       - 選択肢の欄には何も書かないため、この本文だけで読者が内容（スペック、価格、魅力、背景）を完全に理解できるように、**600〜800文字**で詳しく解説してください。
+       - 専門用語があれば噛み砕き、賛否両論のポイントにも触れてください。
 
     3. **選択肢 (items)**: 
-       - `name`: 選択肢の名前のみ（例：「プレイする」「スルー」「あり」「なし」）。
+       - `name`: 選択肢の名前のみ。
+       - **重要: 2つ〜4つの選択肢を作成してください。**
+         - 単純な対立なら2つ（例：「あり」「なし」）。
+         - 選択の余地があるなら3〜4つ（例：「即買い」「セール待ち」「見送り」「様子見」）。
        - **解説文 (text) は不要です。絶対に作成しないでください。**
 
     4. **コメント (comments)**:
@@ -228,12 +236,13 @@ def generate_article_plan(item):
       "category": "social/food/tech/anime/entame/game のいずれか",
       "title": "ニュース事実＋問いかけ",
       "h2_title": "導入見出し",
-      "h2_text": "ニュース詳細・特徴を含む充実した本文(400字以上)",
+      "h2_text": "ニュース詳細・特徴を含む充実した本文(600文字以上)",
       "fact_h3": "豆知識見出し",
       "fact_text": "豆知識(Wikiがない場合は空文字)",
       "items": [
-        {{ "name": "選択肢1(短く)" }}, 
-        {{ "name": "選択肢2(短く)" }}
+        {{ "name": "選択肢1" }}, 
+        {{ "name": "選択肢2" }},
+        {{ "name": "選択肢3(必要なら)" }}
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -402,7 +411,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v53 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v55 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
