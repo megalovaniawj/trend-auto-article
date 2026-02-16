@@ -100,7 +100,7 @@ def check_exists(title):
     print(f"   🔍 重複チェック: '{search_query}' で検索...", end="")
     
     try:
-        res = requests.get(endpoint, headers=headers, timeout=10)
+        res = requests.get(endpoint, headers={'Authorization': headers['Authorization']}, timeout=10)
         if res.status_code == 200:
             posts = res.json()
             if posts:
@@ -174,7 +174,11 @@ def fetch_web_info(url):
 
 def get_wikipedia_data(keyword):
     try:
-        clean_kw = re.sub(r'【.*?】', '', keyword).strip()
+        # キーワード抽出の強化（タイトルから漢字2文字以上、カタカナ英数字3文字以上を抜き出す）
+        kw_match = re.findall(r'[a-zA-Z0-9]{3,}|[ァ-ンー]{3,}|[一-龠]{2,}', keyword)
+        search_kw = max(kw_match, key=len) if kw_match else keyword[:15]
+        
+        clean_kw = re.sub(r'【.*?】', '', search_kw).strip()
         url = "https://ja.wikipedia.org/w/api.php"
         params = { "action": "query", "format": "json", "prop": "extracts", "exintro": True, "explaintext": True, "redirects": 1, "titles": clean_kw }
         r = requests.get(url, params=params, timeout=5)
@@ -232,7 +236,11 @@ def generate_article_plan(item):
          - 選択の余地があるなら3〜4つ（例：「即買い」「セール待ち」「見送り」「様子見」）。
        - **解説文 (text) は不要です。絶対に作成しないでください。**
 
-    4. **コメント (comments)**:
+    4. **豆知識 (fact_text)**:
+       - Wiki資料がある場合はそれを活用し、ない場合でもあなたの知識を活用して、ニュースに関連する情報を**200文字前後**で詳しく書いてください。
+       - **もしどうしても書くことがない場合のみ、空文字 "" にしてください。その場合、見出し(fact_h3)も空文字にしてください。**
+
+    5. **コメント (comments)**:
        - 上記の「コメント生成指示」に従い、5つの異なる視点のコメントを生成してください。
 
     【出力形式(JSONのみ)】
@@ -241,8 +249,8 @@ def generate_article_plan(item):
       "title": "ニュース事実＋問いかけ",
       "h2_title": "導入見出し",
       "h2_text": "ニュース詳細・特徴を含む充実した本文(600文字以上)",
-      "fact_h3": "豆知識見出し",
-      "fact_text": "豆知識(Wikiがない場合は空文字)",
+      "fact_h3": "内容に即した具体的な見出し(空にする場合はここも空文字)",
+      "fact_text": "ニュースの背景や雑学(200文字前後。書けない場合は空文字)",
       "items": [
         {{ "name": "選択肢1" }}, 
         {{ "name": "選択肢2" }},
@@ -327,11 +335,17 @@ def post_to_wordpress(ai_data):
 [vote_summary items="{items_str}"]
 """
 
+    # ★修正箇所: 本文(fact_text)が空なら、見出し(fact_h3)も空にして枠を非表示にする
+    f_text = ai_data.get('fact_text', '').strip()
+    f_h3 = ai_data.get('fact_h3', '関連情報')
+    if not f_text:
+        f_h3 = ""
+
     meta = {
         'wiki_h2_title': ai_data.get('h2_title', 'ニュースの背景'),
         'wiki_h2_text': ai_data.get('h2_text', ''),
-        'wiki_fact_h3': ai_data.get('fact_h3', '関連情報'),
-        'wiki_info_fact': ai_data.get('fact_text', ''),
+        'wiki_fact_h3': f_h3,
+        'wiki_info_fact': f_text,
         'post_views_count': '0'
     }
 
