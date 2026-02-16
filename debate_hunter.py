@@ -37,8 +37,8 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定
-MODEL_NAME = "gemma-3-27b-it" 
+# ★モデル設定 (実績のあるGemma 3)
+MODEL_NAME = "gemma-3-27b-it"
 
 # ★カテゴリーID設定
 CATEGORY_IDS = {
@@ -104,7 +104,7 @@ def check_exists(title):
 # --- 1. トレンド収集 ---
 
 def get_trends():
-    print("📈 トレンド収集中 (Google & RSS)...", end="")
+    print("📈 トレンド収集中...", end="")
     items = []
     
     # Google Trends
@@ -174,51 +174,52 @@ def generate_article_plan(item):
     persona_prompt = """
     【コメント生成指示】
     この記事に対する「読者の反応」を5〜8件生成せよ。以下の人格確率に基づいて演じ分けること。
-    - **主要人格 (計80%)**:
-      1. 普通: 「〜だね」
-      2. 丁寧: 「〜ですね」
-      3. 雑・男言葉: 「〜だろ」
-      4. 感情的: 「〜すぎ！」「マジで」
-      5. 弱気: 「〜かな？」「〜だっけ？」
-    - **レア人格 (計20%)**:
-      1. ネットスラング: 「草」「それな」
-      2. 関西弁: 「〜やな」「せやね」
-      3. オタク: 「尊い」「〜なんだよなぁ」
-      4. ギャル: 「神」「ビジュ良すぎ」
-      5. 一言: 「これ。」
+    出力形式は必ずJSONの `comments` 配列の中に `{"name": "匿名", "content": "本文"}` の形で入れること。
+    - **主要人格**: 普通、丁寧、雑・男言葉、感情的、弱気
+    - **レア人格**: ネットスラング、関西弁、オタク、ギャル、一言
     """
 
     prompt = f"""
-    あなたはWebメディアの凄腕編集長です。以下のトレンド情報を元に、PVが爆発する「投票記事」を作成してください。
+    あなたは投票サイト「どっちよ.com」の編集長です。
+    トレンドニュースを元に、読者が**「どちらかを選びたくなる」**投票記事を作成してください。
 
     【入力情報】
     {context_text}
 
-    【企画ルール】
-    1. **ジャンル判定**: 内容から最適なカテゴリ(social, food, tech, anime, entame, game)を選べ。
-    2. **記事タイプ**: 
-       - 「A vs B」や「賛否両論」なら → 対決型
-       - 「推しキャラ」「名曲」なら → 多選択型(Wiki等の固有名詞を使用)
-       - 「新商品」「新作」なら → 期待度評価(買う/買わない)
-    3. **内容**: 
-       - タイトルは煽りを含めてクリックしたくなるように。
-       - 導入文はニュース背景を詳しく解説。
-       - 豆知識はWiki情報を活用。
-       - **選択肢は必ず2つ以上作成すること。**
+    【★企画ルール：ここを間違えないでください】
+    
+    1. **タイトル (title)**: 
+       - 必ず**「〜はどっち？」「〜あり？なし？」「〜買う？見送る？」「〜は誰？」**のように、読者に問いかける形式にしてください。
+       - 「〇〇が発売」のような単なるニュース見出しは**不可**です。
+
+    2. **選択肢の解説 (text)**: 
+       - **「用語の説明」は禁止です。**（例: 「買うとは購入することです」→ NG）
+       - その選択肢を選ぶべき**「理由」や「アピールポイント」**を書いてください。
+       - 例（買う場合）: 「前作からグラフィックが大幅進化。シリーズファンなら間違いなく買い。」
+       - 例（なしの場合）: 「時期尚早という印象。もう少し議論が尽くされるのを待ちたい。」
+
+    3. **コメント (comments)**:
+       - 実際に掲示板に書き込まれていそうな、リアルで短い反応を作ってください。
 
     【出力形式(JSONのみ)】
     {{
       "category": "social/food/tech/anime/entame/game のいずれか",
-      "title": "記事タイトル",
-      "h2_title": "導入見出し",
-      "h2_text": "導入本文(300字程度)",
+      "title": "記事タイトル（問いかけ形式）",
+      "h2_title": "導入見出し（例：〇〇がついに解禁！あなたは...？）",
+      "h2_text": "ニュース詳細を含む導入本文(400字程度)",
       "fact_h3": "豆知識見出し",
-      "fact_text": "豆知識本文(Wiki活用)",
+      "fact_text": "Wiki情報を活用した豆知識(200字程度)",
       "items": [
-        {{ "name": "選択肢1", "text": "解説..." }},
-        {{ "name": "選択肢2", "text": "解説..." }}
+        {{ "name": "選択肢1(短く)", "text": "なぜこれを選ぶのか？という強い理由(100字程度)" }},
+        {{ "name": "選択肢2(短く)", "text": "なぜこれを選ぶのか？という強い理由(100字程度)" }}
       ],
-      "comments": ["コメント1", "コメント2", "コメント3", "コメント4", "コメント5"]
+      "comments": [
+          {{ "name": "匿名", "content": "コメント本文1" }},
+          {{ "name": "匿名", "content": "コメント本文2" }},
+          {{ "name": "匿名", "content": "コメント本文3" }},
+          {{ "name": "匿名", "content": "コメント本文4" }},
+          {{ "name": "匿名", "content": "コメント本文5" }}
+      ]
     }}
     {persona_prompt}
     """
@@ -239,25 +240,37 @@ def generate_article_plan(item):
                 return json.loads(text[start:end])
             elif res.status_code == 429:
                 if attempt < max_retries - 1:
-                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。30秒待機して再試行...")
-                    time.sleep(30) 
+                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。20秒待機...")
+                    time.sleep(20) 
                 else:
-                    print(f"   ❌ API制限 ({MODEL_NAME}) が解除されません。")
                     return None
             else:
-                try:
-                    err_msg = res.json().get('error', {}).get('message', '詳細なし')
-                    print(f"   ❌ API Error ({res.status_code}): {err_msg}")
-                except:
-                    print(f"   ❌ API Error ({res.status_code}): {res.text}")
                 return None
         except Exception as e:
             print(f"   ❌ 通信エラー: {e}")
             return None
-            
     return None
 
-# --- 4. WordPress投稿 ---
+# --- 4. コメント投稿関数（独立化） ---
+def post_comment_to_wp(pid, name, content):
+    url = f"{WP_URL}/wp-json/wp/v2/comments"
+    headers = get_auth_header()
+    # 投稿時間を少し過去にずらす（自然に見せるため）
+    c_dt = datetime.now() - timedelta(minutes=random.randint(5, 120))
+    data = {
+        'post': pid,
+        'author_name': name,
+        'content': content,
+        'status': 'approve',
+        'date': c_dt.isoformat()
+    }
+    try:
+        res = requests.post(url, headers=headers, json=data, timeout=10)
+        return res.status_code == 201
+    except:
+        return False
+
+# --- 5. WordPress投稿 ---
 
 def post_to_wordpress(ai_data):
     if not ai_data: return False
@@ -268,9 +281,7 @@ def post_to_wordpress(ai_data):
     wp_title = ai_data.get('title')
     items = ai_data.get('items', [])
     
-    if len(items) < 2:
-        print("   ⚠️ 選択肢不足のためスキップ")
-        return False
+    if len(items) < 2: return False
 
     items_str = ",".join([f"{item['name']}|" for item in items])
     
@@ -325,18 +336,37 @@ def post_to_wordpress(ai_data):
             pid = res.json()['id']
             print(f"   ✅ 投稿成功: {wp_title[:15]}... (ID:{pid})")
             
-            print("   💬 コメント投入中...", end="")
-            for comment in ai_data.get('comments', []):
-                c_data = {
-                    'post': pid,
-                    'author_name': '匿名',
-                    'content': comment,
-                    'status': 'approve',
-                    'date': (datetime.now() - timedelta(minutes=random.randint(10, 300))).isoformat()
-                }
-                requests.post(f"{WP_URL}/wp-json/wp/v2/comments", headers=get_auth_header(), json=c_data, timeout=5)
-                time.sleep(1) 
-            print(" 完了")
+            # --- コメント投稿処理 (確実版) ---
+            print("   💬 コメント投稿中...", end="")
+            
+            comments_list = ai_data.get('comments', [])
+            
+            # AIがコメントを生成しなかった場合の予備リスト
+            if not comments_list or not isinstance(comments_list, list):
+                comments_list = [
+                    {"name": "匿名", "content": "これは気になる！"},
+                    {"name": "匿名", "content": "様子見かなあ。"},
+                    {"name": "匿名", "content": "期待してる！"},
+                    {"name": "匿名", "content": "どっちも捨てがたい..."},
+                    {"name": "匿名", "content": "盛り上がってきたね"}
+                ]
+
+            success_c = 0
+            for c in comments_list:
+                # 文字列だけ返ってきた場合の対策
+                if isinstance(c, str):
+                    c_content = c
+                    c_name = "匿名"
+                else:
+                    c_content = c.get('content', c.get('text', ''))
+                    c_name = c.get('name', '匿名')
+                
+                if c_content:
+                    if post_comment_to_wp(pid, c_name, c_content):
+                        success_c += 1
+                    time.sleep(1) # 連投規制回避
+            
+            print(f" 完了 ({success_c}件)")
             return True
         else:
             print(f"   ❌ WP投稿失敗: {res.status_code} {res.text}")
@@ -348,7 +378,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v38 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v40 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
