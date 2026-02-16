@@ -26,8 +26,8 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定 (画像の通りに設定)
-MODEL_NAME = "gemini-2.5-pro" 
+# ★モデル設定 (main.pyと同じ実績のあるモデルに戻しました)
+MODEL_NAME = "gemma-3-27b-it" 
 
 # ★カテゴリーID設定
 CATEGORY_IDS = {
@@ -228,10 +228,10 @@ def generate_article_plan(item):
                 return json.loads(text[start:end])
             elif res.status_code == 429:
                 if attempt < max_retries - 1:
-                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。60秒待機して再試行...")
-                    time.sleep(60) # ★60秒しっかり待つ
+                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。30秒待機して再試行...")
+                    time.sleep(30) 
                 else:
-                    print(f"   ❌ API制限が厳しいため、このモデル ({MODEL_NAME}) では連続生成できません。")
+                    print(f"   ❌ API制限 ({MODEL_NAME}) が解除されません。")
                     return None
             else:
                 try:
@@ -337,7 +337,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v35 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v37 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -356,10 +356,10 @@ def main():
                 count += 1
                 try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
                 except: pass
-        
-        # Proモデルは制限がきついため、記事作成の間隔も長めに取る
-        print("   ☕ 休憩中(60s)...")
-        time.sleep(60)
+                
+        # Gemma 3なら15秒待機で十分
+        print("   ☕ 休憩中(15s)...")
+        time.sleep(15)
 
     print(f"\n🏁 完了: {count}件作成")
 
