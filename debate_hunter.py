@@ -15,25 +15,33 @@ from datetime import datetime, timedelta
 WP_URL = os.environ.get("WP_URL", "https://docchiyo.com")
 WP_USER = os.environ.get("WP_USER", "bear")
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # 必須：GitHub Secretsに設定してください
 
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
+# モデル設定
+MODEL_NAME = "gemma-3-27b-it"
+
 # ★カテゴリーID設定
 CATEGORY_IDS = {
-    "social": 194,  "food": 11, "tech": 24,
-    "anime": 155, "entame": 95, "game": 13
+    "social": 194,
+    "food": 11,
+    "tech": 24,
+    "anime": 155,
+    "entame": 95,
+    "game": 13
 }
 
-# RSSリスト
+# RSSリスト (社会・エンタメ・トレンド)
 RSS_URLS = [
-    "https://news.yahoo.co.jp/rss/topics/dom.xml",    # 社会
-    "https://news.yahoo.co.jp/rss/topics/ent.xml",    # エンタメ
-    "https://news.livedoor.com/topics/rss/dom.xml",   # 国内
-    "https://www.4gamer.net/rss/index.xml",           # ゲーム
-    "https://rocketnews24.com/feed/",                 # グルメ
-    "https://feeds.cinematoday.jp/cinematoday/rss",   # 映画
-    "https://mantan-web.jp/rss/rss.xml"               # アニメ
+    "https://news.yahoo.co.jp/rss/topics/dom.xml",
+    "https://news.yahoo.co.jp/rss/topics/ent.xml",
+    "https://news.livedoor.com/topics/rss/dom.xml",
+    "https://www.4gamer.net/rss/index.xml",
+    "https://rocketnews24.com/feed/",
+    "https://feeds.cinematoday.jp/cinematoday/rss",
+    "https://mantan-web.jp/rss/rss.xml"
 ]
 
 NG_WORDS = ["セール", "決算", "インタビュー", "レポート", "舞台", "オーディション", "求人", "人事", "放送", "プレゼント", "まとめ", "訃報", "死去", "ご冥福", "亡く", "逝去"]
@@ -81,18 +89,21 @@ def determine_category(text):
 # --- 情報収集 ---
 
 def fetch_og_description(url):
+    """ニュース記事の本文要約を取得"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
         r = requests.get(url, headers=headers, timeout=5)
         if r.status_code == 200:
-            match = re.search(r'<meta property="og:description" content="(.*?)"', r.text)
-            if match: return clean_text(match.group(1))
+            # description または og:description を探す
+            match = re.search(r'<meta (property|name)="og:description" content="(.*?)"', r.text)
+            if match: return clean_text(match.group(2))
             match2 = re.search(r'<meta name="description" content="(.*?)"', r.text)
             if match2: return clean_text(match2.group(1))
     except: pass
     return None
 
 def get_wikipedia_summary(keyword):
+    """Wikipediaから情報を取得"""
     try:
         clean_kw = re.sub(r'【.*?】', '', keyword).strip()
         url = "https://ja.wikipedia.org/w/api.php"
@@ -107,245 +118,201 @@ def get_wikipedia_summary(keyword):
     except: pass
     return None
 
-def extract_specific_info(text):
-    """テキストから価格と日付を抽出する"""
-    price = re.search(r'(\d{1,3}(,\d{3})*|\d+)円', text)
-    date = re.search(r'(\d{4}年)?\d{1,2}月\d{1,2}日', text)
-    return price.group(0) if price else None, date.group(0) if date else None
+# --- AI生成ロジック (main.py方式) ---
 
-# --- ★重要：コメント生成ロジック (PHP版の完全移植) ---
-
-def generate_persona_comment(category, title):
+def generate_article_with_ai(category, title, news_text, wiki_text):
     """
-    PHP版のロジックに基づき、確率で人格を選定し、口調を変換して返す
+    Gemini APIを使って、記事構成・タイトル・コメントを一括生成する。
+    PHPの人格ロジックをプロンプトに組み込む。
     """
     
-    # 1. 人格の重み付け (PHP版準拠)
-    personas = [
-        'normal', 'polite', 'rough', 'excited', 'question', # 主要5人格 (各16%)
-        'slang', 'kansai', 'otaku', 'gal', 'simple'         # レア5人格 (各4%)
-    ]
-    weights = [16, 16, 16, 16, 16, 4, 4, 4, 4, 4]
+    # PHP版の人格定義
+    persona_prompt = """
+    【コメント生成ルール】
+    この記事に対する読者の反応コメントを5〜8件生成してください。
+    以下の「人格」をランダムに割り当てて、口調を演じ分けてください。
     
-    persona = random.choices(personas, weights=weights, k=1)[0]
-    
-    # 2. ベースコメントの選択 (カテゴリ別)
-    base_comments = {
-        "social": [
-            "これに関しては支持するわ。もっと早くやるべきだった。",
-            "日本終わったな。{title}とか正気かよ。",
-            "批判してるやつ多いけど、対案あるの？",
-            "国民を舐めてるとしか思えない対応だな。",
-            "どっちもどっちだな。冷静になろうぜ。",
-            "これマスコミの切り取りじゃないの？事実確認が先。",
-            "増税とか規制ばっかり。いい加減にしてほしい。",
-            "これは評価できる。英断だと思うよ。"
-        ],
-        "food": [
-            "{title}食べてきた！マジで美味かったからおすすめ。",
-            "写真詐欺すぎて草。実物ちっさ！",
-            "カロリー見てそっと閉じたわｗ",
-            "期待してたのに味が薄かった...。",
-            "売り切れで買えなかったんだけど！",
-            "値段の割に満足度高いね。リピ確。",
-            "これ食べるなら牛丼3杯食うわ。"
-        ],
-        "tech": [
-            "{title}のスペックえぐいな。即買い決定。",
-            "高すぎワロタ。誰が買うねんこれ。",
-            "デザインはいいけどバッテリー持ちが心配。",
-            "前モデルで十分じゃね？買い換える必要なし。",
-            "やっと求めてた機能が来た！遅すぎるわ。",
-            "レビュー待ちかな。人柱にはなりたくない。",
-            "信者専用アイテム乙。"
-        ],
-        "anime": [
-            "神回確定。作画班生きてるか？",
-            "原作改変ひどすぎ。脚本家出てこい。",
-            "声優の演技に鳥肌立ったわ。",
-            "今期の覇権はこれで決まりだな。",
-            "展開遅すぎて切ったわ。",
-            "キャラデザがどうしても受け付けない...",
-            "2期あるかな？円盤買わなきゃ。"
-        ],
-        "entame": [
-            "実写化とか誰得だよ。やめてくれ。",
-            "キャストがハマり役すぎる。見てよかった。",
-            "脚本がガバガバ。時間の無駄だった。",
-            "ラストの展開で泣いた。ハンカチ必須。",
-            "ポリコレ配慮しすぎて内容薄っぺらいな。",
-            "賛否両論あるけど俺は好きだな。"
-        ],
-        "game": [
-            "神ゲー確定演出きたあああ！",
-            "どうせまた集金ゲーだろ。騙されんぞ。",
-            "リセマラ地獄が見える...",
-            "PV詐欺じゃなければ覇権取れる。",
-            "運営があそこだから期待できないわ。",
-            "無課金でも遊べるならやる。",
-            "容量デカすぎｗスマホ爆発するわ。"
-        ]
-    }
-    
-    # テンプレート取得 (なければgame用)
-    templates = base_comments.get(category, base_comments["game"])
-    text = random.choice(templates)
-    
-    # タイトル置換 (長すぎる場合は短縮)
-    short_title = title[:10]
-    text = text.replace("{title}", short_title)
+    - 主要人格 (確率高):
+      1. 普通: 「〜だね」「〜かも」
+      2. 丁寧: 「〜ですね」「〜と思います」
+      3. 雑・男言葉: 「〜だろ」「〜じゃね？」
+      4. 感情的: 「〜すぎ！」「マジで〜」
+      5. 弱気: 「〜かな？」「〜だっけ？」
+    - レア人格 (確率低):
+      1. ネットスラング: 「草」「それな」
+      2. 関西弁: 「〜やな」「せやね」
+      3. オタク: 「尊い」「〜なんだよなぁ」
+      4. ギャル: 「神」「ビジュ良すぎ」
+      5. 一言: 「これ。」「間違いない。」
+    """
 
-    # 3. 人格ごとの口調変換ロジック
-    if persona == 'normal':   # 普通
-        pass
-    elif persona == 'polite': # 丁寧
-        text = text.replace("だろ", "でしょう").replace("草", "面白いですね").replace("ねん", "のでしょうか").replace("乙", "お疲れ様です").replace("わ。", "ですね。") + " と思います。"
-    elif persona == 'rough':  # 雑・男言葉
-        text = text.replace("です", "だろ").replace("ます", "る").replace("すごい", "ヤバい").replace("私", "俺").replace("ない。", "ねぇよ。")
-    elif persona == 'excited':# 興奮
-        text = text.replace("。", "！！！").replace("すごい", "神すぎ！").replace("美味かった", "優勝した").replace("！", "！！") + " マジでヤバい！"
-    elif persona == 'question':# 弱気・疑問
-        text = text.replace("だ。", "かな...？").replace("よ。", "かも？").replace("ね。", "だよね？") + " 間違ってたらごめん。"
-    elif persona == 'slang':  # ネットスラング
-        text = text.replace("。", "ｗ").replace("！", "ｗｗ") + " 草不可避ｗｗｗ"
-    elif persona == 'kansai': # 関西弁
-        text = text.replace("だろ", "やろ").replace("だ。", "やな。").replace("ねん", "んや").replace("すごい", "えぐい").replace("ない。", "あらへん。")
-    elif persona == 'otaku':  # オタク
-        text = text + " というか、結論これ一択なんだよなぁ（早口）"
-    elif persona == 'gal':    # ギャル
-        text = text.replace("。", "⤴︎").replace("すごい", "神").replace("美味かった", "優勝").replace("微妙", "ビミョー") + " 尊い..."
-    elif persona == 'simple': # 一言
-        text = text.split("。")[0] + "。"
+    prompt = f"""
+    あなたはWebメディアの編集長です。以下のトレンドニュースを元に、読者参加型の「投票記事」を作成してください。
+    テンプレートや固定文言は使わず、ニュースの内容に合わせて動的に文章を構成してください。
 
-    return text
+    【入力情報】
+    カテゴリ: {category}
+    ニュースタイトル: {title}
+    ニュース概要: {news_text}
+    Wikipedia情報: {wiki_text}
 
-# --- コンテンツ生成 ---
+    【作成指示】
+    1. **タイトル**: 読者が思わずクリックしたくなる、煽りや問いかけを含んだタイトル。
+    2. **記事導入(H2)**: ニュースの背景を詳しく解説し、「そこで皆さんに聞きたいのですが...」と投票へ繋げる導入文（300文字程度）。
+    3. **豆知識(H3)**: Wikipedia情報やニュース詳細を元にした、補足情報やトリビア（200文字程度）。
+    4. **選択肢(Items)**: 
+       - ニュースの内容が「対立構造（賛成vs反対、A vs B）」なら、それに応じた2〜4つの選択肢。
+       - 「新商品」や「作品」なら、「期待する/しない」「買う/買わない」など。
+       - 各選択肢には、なぜそれを選ぶのかの短い解説文をつけること。
+    5. **コメント**: {persona_prompt}
+
+    【出力形式(JSON)】
+    Markdown記法は含めず、純粋なJSONのみを出力してください。
+    {{
+      "title": "記事タイトル",
+      "h2_title": "導入の見出し（例：〇〇がついに発表！）",
+      "h2_text": "導入の本文...",
+      "fact_h3": "豆知識の見出し",
+      "fact_text": "豆知識の本文...",
+      "items": [
+        {{ "name": "選択肢名（例：賛成）", "text": "選択肢の解説..." }},
+        {{ "name": "選択肢名（例：反対）", "text": "選択肢の解説..." }}
+      ],
+      "comments": [
+        "コメント1", "コメント2", "コメント3", "コメント4", "コメント5"
+      ]
+    }}
+    """
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    data = { "contents": [{"parts": [{"text": prompt}]}] }
+    
+    try:
+        res = requests.post(url, headers=headers, json=data, timeout=60)
+        if res.status_code == 200:
+            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            # JSON部分だけ抽出
+            text = text.replace('```json', '').replace('```', '').strip()
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            return json.loads(text[start:end])
+    except Exception as e:
+        print(f"Generate Error: {e}")
+    return None
+
+# --- 投稿処理 ---
 
 def create_post(entry, category):
     title = clean_text(entry.title)
     link = entry.link
     
-    # 情報収集 (優先度: スクレイピング > RSS)
-    real_desc = fetch_og_description(link)
-    rss_desc = clean_text(entry.description)
-    main_text = real_desc if real_desc and len(real_desc) > 30 else rss_desc
-    
-    # Wikipedia検索
-    wiki_text = get_wikipedia_summary(title)
-    
-    # 具体情報の抽出
-    price, date_str = extract_specific_info(main_text)
+    # 情報収集
+    news_text = fetch_og_description(link) or clean_text(entry.description)
+    wiki_text = get_wikipedia_summary(title) or "詳細情報は公式発表をご確認ください。"
     
     clean_title = re.sub(r'【.*?】', '', title).split("」")[0].replace("「", "").strip()
-    if len(clean_title) > 35: clean_title = clean_title[:35] + "..."
+    
+    # ★AIによる記事生成
+    print(f"   🧠 AIが記事を構成中... ({clean_title})")
+    ai_data = generate_article_with_ai(category, title, news_text, wiki_text)
+    
+    if not ai_data:
+        print("   ❌ AI生成失敗")
+        return None, None, None
 
-    # 選択肢の生成
-    if category == "social":
-        wp_title = f"【議論】『{clean_title}』はあり？なし？世間の反応まとめ"
-        options = ["支持する（あり）", "理解できない（なし）", "どちらとも言えない", "もっと議論が必要"]
-        weights = [30, 40, 20, 10]
-        box1_title = "ニュース概要"
-    elif category == "food":
-        wp_title = f"【評価】『{clean_title}』はウマい？写真詐欺？食べた感想まとめ"
-        options = ["神ウマ（リピ確）", "普通に美味しい", "期待外れ（微妙）", "金返せ（マズい）"]
-        weights = [50, 30, 10, 10]
-        box1_title = "商品詳細"
-    else: # tech, game, entame, anime
-        wp_title = f"【評価】『{clean_title}』は神？微妙？本音評価まとめ"
-        options = ["最高（神）", "普通（良）", "微妙（期待外れ）", "ダメ（論外）"]
-        weights = [40, 30, 20, 10]
-        box1_title = "概要"
-
-    # HTMLタグを含まないプレーンテキストで構成
+    # AIデータを元に構築
+    wp_title = ai_data.get('title', f"【投票】{clean_title}")
+    items = ai_data.get('items', [])
+    comments = ai_data.get('comments', [])
+    
+    # 選択肢文字列作成
+    items_str = ",".join([f"{item['name']}|" for item in items])
+    
+    # 本文（フォームのみ）
     content = f"""
-[vote_bar items="{",".join([f"{o}|" for o in options])}"][vote_summary items="{",".join([f"{o}|" for o in options])}"]<p>話題の『{clean_title}』について、皆さんの本音を聞かせてください。<br><strong>「支持する？」それとも「反対？」</strong><br>忖度なしの評価を投票で決定します！</p>"""
+[vote_bar items="{items_str}"]
+[vote_summary items="{items_str}"]
+<p>話題の『{clean_title}』について、皆さんの本音を聞かせてください。<br><strong>「支持する？」それとも「反対？」</strong><br>忖度なしの評価を投票で決定します！</p>
+"""
 
-    # 導入文 (Wikiがあれば追加)
-    intro_text = main_text[:250] + "..."
-    if wiki_text: intro_text += "\n\n【Wikipedia概要】\n" + wiki_text[:200] + "..."
-
-    # メタデータセット (固定文言を全廃)
+    # メタデータセット
     meta = {
-        'wiki_h2_title': f"{clean_title} について",
-        'wiki_h2_text': intro_text,
-        'wiki_info1_h3': box1_title, 'wiki_info_1': main_text,
-        
-        'wiki_info3_h3': "みんなの反応",
-        'wiki_info_3': "SNSや掲示板では既に様々な意見が飛び交っています。下のコメント欄で、あなたの直感的な意見や感想を書き込んでください。",
+        'wiki_h2_title': ai_data.get('h2_title', f"{clean_title}について"),
+        'wiki_h2_text': ai_data.get('h2_text', news_text),
+        'wiki_fact_h3': ai_data.get('fact_h3', "関連情報"),
+        'wiki_info_fact': ai_data.get('fact_text', wiki_text),
         'post_views_count': '0'
     }
 
-    # ★重要：情報がある場合のみメタデータに追加 (ない場合は空欄)
-    idx = 2
-    if date_str:
-        meta[f'wiki_info{idx}_h3'] = "日時・期間"
-        meta[f'wiki_info_{idx}'] = f"関連日時: {date_str}"
-        idx += 1
-    
-    if price:
-        meta[f'wiki_info{idx}_h3'] = "価格情報"
-        meta[f'wiki_info_{idx}'] = f"価格: {price}"
-        idx += 1
-
-    # Wikiがあれば豆知識へ
-    if wiki_text:
-        meta['wiki_fact_h3'] = "関連知識 (Wikipedia)"
-        meta['wiki_info_fact'] = wiki_text[:400] + "..."
-
-    # 投票初期値
-    initial_votes = [0] * 4
+    # 投票初期値 & 詳細説明セット
+    initial_votes = [0] * 10
     total_sakura = random.randint(40, 60)
+    
+    # 選択肢データの登録
+    for i, item in enumerate(items):
+        idx = i + 1
+        meta[f'wiki_item_name_{idx}'] = item['name']
+        meta[f'wiki_item_img_{idx}'] = ""
+        
+        # アイテムごとの解説（AI生成）をセット
+        meta[f'wiki_info{idx}_h3'] = item['name']
+        meta[f'wiki_info_{idx}'] = item.get('text', '')
+    
+    # 投票数の割り振り
+    weights = [60, 30, 10, 10, 5, 5, 5, 5, 5, 5] # 上位に偏らせる
     for _ in range(total_sakura):
-        i = random.choices([0, 1, 2, 3], weights=weights)[0]
-        initial_votes[i] += 1
-    for i, opt in enumerate(options, 1):
-        meta[f'wiki_item_name_{i}'] = opt; meta[f'wiki_item_img_{i}'] = ""; meta[f'vote_multi_idx_{i-1}'] = str(initial_votes[i-1])
+        # 選択肢数に合わせて重みリストをスライス
+        valid_weights = weights[:len(items)]
+        chosen_idx = random.choices(range(len(items)), weights=valid_weights)[0]
+        initial_votes[chosen_idx] += 1
+
+    for i in range(len(items)):
+        meta[f'vote_multi_idx_{i}'] = str(initial_votes[i])
 
     post_data = {
-        'title': wp_title, 'content': content, 'status': 'draft', 
+        'title': wp_title,
+        'content': content,
+        'status': 'draft', # 下書き
         'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
-        'categories': [CATEGORY_IDS.get(category, 1)], 'meta': meta
+        'categories': [CATEGORY_IDS.get(category, 1)],
+        'meta': meta
     }
 
     headers = get_auth_header()
-    if not headers: return None, None
+    if not headers: return None, None, None
 
     try:
         res = requests.post(f"{WP_URL}/wp-json/wp/v2/posts", headers=headers, json=post_data, timeout=30)
         if res.status_code == 201:
             pid = res.json()['id']
-            print(f"✅ 作成成功({category}): {clean_title}")
-            return pid, clean_title
+            print(f"✅ 作成成功({category}): {wp_title}")
+            return pid, comments, clean_title
+        else:
+            print(f"❌ 作成失敗: {res.status_code} {res.text}")
     except Exception as e: print(f"❌ エラー: {e}")
-    return None, None
+    return None, None, None
 
-def post_sakura_comment(post_id, title, category):
-    if not post_id: return
+def post_sakura_comment(post_id, comments):
+    if not post_id or not comments: return
     url = f"{WP_URL}/wp-json/wp/v2/comments"
     headers = get_auth_header()
     if not headers: return
     
-    print(f"   💬 コメント投稿開始...")
+    print(f"   💬 コメント投稿開始（{len(comments)}件）...")
     
-    # 5〜8件のコメントを生成して投稿
-    for i in range(random.randint(5, 8)):
-        # ★PHP版ロジックでコメント生成
-        c_body = generate_persona_comment(category, title)
-        
+    for i, text in enumerate(comments):
+        # 投稿時間をずらす
         c_dt = datetime.now() - timedelta(minutes=random.randint(5, 300))
         data = {
             'post': post_id,
             'author_name': '匿名', 
-            'content': c_body,
+            'content': text,
             'status': 'approve',
             'date': c_dt.isoformat()
         }
         try:
-            r = requests.post(url, headers=headers, json=data, timeout=10)
-            if r.status_code == 201:
-                print(f"      - コメント{i+1} OK: {c_body[:20]}...")
-            else:
-                print(f"      - コメント{i+1} 失敗: {r.status_code}")
+            requests.post(url, headers=headers, json=data, timeout=10)
         except: pass
         time.sleep(1.5) # 連投規制回避
 
@@ -356,7 +323,12 @@ def send_discord(title, cat):
     except: pass
 
 def main():
-    print("🤖 議論ハンター(debate_hunter) v24 起動")
+    print("🤖 議論ハンター(debate_hunter) v25 - AI編集長モード 起動")
+    
+    if not GEMINI_API_KEY:
+        print("❌ エラー: GEMINI_API_KEY が設定されていません。")
+        return
+
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
     total = 0
     for rss in RSS_URLS:
@@ -382,12 +354,17 @@ def main():
                 cat = determine_category(title + entry.description)
                 print(f"\n✨ ヒット({cat}): {title}")
                 
-                pid, clean_title = create_post(entry, cat)
+                pid, comments, clean_title = create_post(entry, cat)
                 if pid:
-                    post_sakura_comment(pid, clean_title, cat)
-                    send_discord(title, cat)
+                    post_sakura_comment(pid, comments)
+                    send_discord(clean_title, cat)
                     total += 1
                     rss_count += 1
+                    
+                    # API制限回避のため休憩
+                    print("☕ 休憩中(10s)...")
+                    time.sleep(10)
+                    
         except Exception as e: print(f"エラー: {e}")
         if total >= 3: break
     print(f"🏁 完了: {total}件作成")
