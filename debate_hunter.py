@@ -94,9 +94,8 @@ def check_exists(title):
 # --- 1. トレンド収集 ---
 
 def get_trends():
-    print("📈 トレンド収集中 (Google & RSS)...", end="")
+    print("📈 トレンド収集中...", end="")
     items = []
-    
     try:
         url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=all&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -120,7 +119,6 @@ def get_trends():
                 if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
                     items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
         except: pass
-        
     print(f" OK ({len(items)}件)")
     return items
 
@@ -161,18 +159,15 @@ def generate_article_plan(item):
 
     persona_prompt = """
     【コメント生成指示】
-    この記事に対する「読者の反応」を5件生成せよ。JSONの `comments` 配列に格納すること。
-    以下の人格を使い分けること：
-    - 普通: 「〜だね」「〜かも」
-    - 丁寧: 「〜ですね」「〜と思います」
-    - 雑: 「〜だろ」「〜じゃね？」
-    - 興奮: 「〜すぎ！」「マジで」
-    - ネット民: 「草」「それな」
+    この記事に対する「読者の反応」を5件生成せよ。以下の人格確率に基づいて演じ分けること。
+    出力はJSONの `comments` 配列に格納すること。
+    - **主要人格**: 普通、丁寧、雑・男言葉、感情的、弱気
+    - **レア人格**: ネットスラング、関西弁、オタク、ギャル、一言
     """
 
     prompt = f"""
     あなたは投票サイト「どっちよ.com」の編集長です。
-    トレンドニュースを元に、読者が**「どちらかを選びたくなる」**投票記事を作成してください。
+    トレンドニュースを元に、読者が「どちらかを選びたくなる」投票記事を作成してください。
 
     【入力情報】
     {context_text}
@@ -180,20 +175,18 @@ def generate_article_plan(item):
     【★企画ルール：厳守】
     
     1. **タイトル (title)**: 
-       - **「説明的なニュース見出し」＋「問いかけ」** の形にしてください。
-       - 短すぎるタイトルはNGです。具体的に書いてください。
-       - OK例: 「【Steam新作】画面端でポーカー？放置系デッキ構築『Card Corner』は買い？見送り？」
-       - OK例: 「【物議】〇〇が△△を批判！この発言は正論？それとも暴言？」
+       - 「ニュースの事実」＋「問いかけ」の形。
+       - 例: 「〇〇がついに発売！買う？見送る？」
+       - 例: 「〇〇の△△発言が物議。これは正論？暴言？」
 
     2. **記事本文 (h2_text)**:
-       - **ここを記事のメインにしてください。**
-       - ニュースの内容、スペック、背景、何が話題なのかを詳細に（400文字程度）書いてください。
-       - 読者がこれを読めば判断できるように情報を網羅してください。
+       - **ここに記事のメインコンテンツ（題材の詳細）を全て記述してください。**
+       - ニュースの背景、スペック、価格、何がすごいのか、なぜ話題なのかを、読者が判断できるように詳しく（400〜500文字）解説してください。
+       - **選択肢の解説欄を使わない分、この本文を充実させることが必須です。**
 
-    3. **選択肢のテキスト (text)**: 
-       - **「用語解説」や「〜するということです」のような説明は一切禁止です。**
-       - 読者がその選択肢を選ぶ際の「決め手」を一言で書いてください。（空欄でも構いません）
-       - 例: 「シリーズファンなら即買い。」「様子見してセール待ち。」
+    3. **選択肢 (items)**: 
+       - `name`: 選択肢の名前（例：「買う」「買わない」「あり」「なし」）
+       - `text`: **必ず空文字 ("") にしてください。** 解説は不要です。
 
     4. **コメント (comments)**:
        - 記事公開と同時に投稿する「サクラコメント」を5つ必ず生成してください。
@@ -201,14 +194,14 @@ def generate_article_plan(item):
     【出力形式(JSONのみ)】
     {{
       "category": "social/food/tech/anime/entame/game のいずれか",
-      "title": "具体的で長いタイトル＋問いかけ",
+      "title": "ニュース事実＋問いかけ",
       "h2_title": "導入見出し",
       "h2_text": "ニュース詳細を含む充実した本文(400字以上)",
       "fact_h3": "豆知識見出し",
       "fact_text": "Wiki情報を活用した豆知識(200字程度)",
       "items": [
-        {{ "name": "選択肢1", "text": "短いアピールポイント(20字以内)" }},
-        {{ "name": "選択肢2", "text": "短いアピールポイント(20字以内)" }}
+        {{ "name": "選択肢1", "text": "" }},
+        {{ "name": "選択肢2", "text": "" }}
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -252,13 +245,12 @@ def generate_article_plan(item):
 def post_comment_to_wp(pid, name, content):
     url = f"{WP_URL}/wp-json/wp/v2/comments"
     headers = get_auth_header()
-    # 投稿時間を少しばらけさせる
     c_dt = datetime.now() - timedelta(minutes=random.randint(5, 120))
     data = {
         'post': pid,
         'author_name': name,
         'content': content,
-        'status': 'approve', # 即時承認
+        'status': 'approve', 
         'date': c_dt.isoformat()
     }
     try:
@@ -266,6 +258,7 @@ def post_comment_to_wp(pid, name, content):
         if res.status_code == 201:
             return True, ""
         else:
+            # エラー詳細を返す（デバッグ用）
             return False, f"{res.status_code} {res.text}"
     except Exception as e:
         return False, str(e)
@@ -307,7 +300,7 @@ def post_to_wordpress(ai_data):
         meta[f'wiki_item_name_{idx}'] = item['name']
         meta[f'wiki_item_img_{idx}'] = ""
         meta[f'wiki_info{idx}_h3'] = item['name']
-        meta[f'wiki_info_{idx}'] = item.get('text', '')
+        meta[f'wiki_info_{idx}'] = "" # ★強制的に空文字にする（解説削除）
         
     weights = [50, 30, 10, 5, 5] + [1] * 5
     for _ in range(total_sakura):
@@ -324,7 +317,7 @@ def post_to_wordpress(ai_data):
     post_data = {
         'title': wp_title,
         'content': content,
-        'status': 'draft', 
+        'status': 'publish', # ★【重要】publishに変更（これでコメントが入る）
         'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
         'categories': [cat_id],
         'meta': meta
@@ -334,16 +327,15 @@ def post_to_wordpress(ai_data):
         res = requests.post(f"{WP_URL}/wp-json/wp/v2/posts", headers=get_auth_header(), json=post_data, timeout=30)
         if res.status_code == 201:
             pid = res.json()['id']
-            print(f"   ✅ 投稿成功: {wp_title[:20]}... (ID:{pid})")
+            print(f"   ✅ 投稿成功 (公開): {wp_title[:20]}... (ID:{pid})")
             
-            # --- コメント投稿処理 (デバッグ強化版) ---
-            print("   💬 コメント投稿開始...")
+            # --- コメント投稿処理 ---
+            print("   💬 コメント投稿中...", end="")
             
             comments_list = ai_data.get('comments', [])
             
-            # AIが空っぽで返してきた場合の緊急バックアップ
+            # AIがコメントを空で返してきた場合のバックアップ
             if not comments_list:
-                print("   ⚠️ AIコメント生成なし -> バックアップを使用")
                 comments_list = [
                     {"name": "匿名", "content": "これは気になる！"},
                     {"name": "匿名", "content": "様子見かなあ。"},
@@ -354,7 +346,6 @@ def post_to_wordpress(ai_data):
 
             success_c = 0
             for c in comments_list:
-                # 文字列だけ返ってきた場合の対策
                 if isinstance(c, str):
                     c_content = c
                     c_name = "匿名"
@@ -366,12 +357,12 @@ def post_to_wordpress(ai_data):
                     success, msg = post_comment_to_wp(pid, c_name, c_content)
                     if success:
                         success_c += 1
-                        print(f"      - OK: {c_content[:15]}...")
+                        print(f"[OK]", end="")
                     else:
-                        print(f"      - NG: {msg}")
+                        print(f"[NG:{msg}]", end="")
                     time.sleep(1) 
             
-            print(f"   🏁 コメント完了 ({success_c}件)")
+            print(f" -> 完了 ({success_c}件)")
             return True
         else:
             print(f"   ❌ WP投稿失敗: {res.status_code} {res.text}")
@@ -383,7 +374,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v41 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v43 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
