@@ -141,9 +141,9 @@ def get_trends():
                     items.append({"title": title, "desc": desc, "link": link})
     except: pass
 
-    # RSS (★ここをランダム順に変更)
+    # RSS (ランダム順)
     shuffled_rss = RSS_URLS.copy()
-    random.shuffle(shuffled_rss) # 毎回リストの中身をシャッフル
+    random.shuffle(shuffled_rss) 
 
     for url in shuffled_rss:
         try:
@@ -195,7 +195,7 @@ def generate_article_plan(item):
     persona_prompt = """
     【コメント生成指示】
     この記事に対する「読者のリアルな書き込み」を5件生成し、JSONの `comments` 配列に格納せよ。
-    以下の5人のキャラクターになりきり、口調やテンションを完全に演じ分けること。
+    以下の5人のキャラクターになりきり、口調やテンションを完全に演じ分けること。名前は不要（システム側で処理するため）。
 
     1. **熱狂的な信者**: 「うおおお！神！」「絶対買う」「覇権確定」 (短文、勢い重視)
     2. **冷笑的なネット民**: 「はいはい解散」「今更感w」「爆死臭がする」 (スラング、煽り)
@@ -338,7 +338,6 @@ def post_to_wordpress(ai_data):
         idx = i + 1
         meta[f'wiki_item_name_{idx}'] = item['name']
         meta[f'wiki_item_img_{idx}'] = ""
-        # ★重要: ここで見出し(h3)と本文(info)を完全に空にする
         meta[f'wiki_info{idx}_h3'] = "" 
         meta[f'wiki_info_{idx}'] = "" 
         
@@ -385,10 +384,11 @@ def post_to_wordpress(ai_data):
             for c in comments_list:
                 if isinstance(c, str):
                     c_content = c
-                    c_name = "匿名"
                 else:
                     c_content = c.get('content', c.get('text', ''))
-                    c_name = c.get('name', '匿名')
+                
+                # ★修正: 名前を強制的に「匿名」にする
+                c_name = "匿名" 
                 
                 if c_content:
                     success, msg = post_comment_to_wp(pid, c_name, c_content)
@@ -411,16 +411,16 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v55 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v56 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
     
     count = 0
     for item in candidates:
-        if count >= 3: break
+        # ★記事作成数: ここで調整 (現在は1件)
+        if count >= 1: break
         
-        # 重複チェック
         if check_exists(item['title']):
             continue
             
