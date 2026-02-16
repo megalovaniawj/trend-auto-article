@@ -31,7 +31,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定: 実績のある Gemma 3
+# ★モデル設定
 MODEL_NAME = "gemma-3-27b-it" 
 
 CATEGORY_IDS = {
@@ -77,42 +77,37 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# ★修正: 30日以内の重複チェック機能
+# 重複チェック機能
 def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
     
-    # 検索精度向上のため20文字まで使用
-    clean_search = clean_text(title)[:20]
-    
-    # ステータスは公開・下書き問わずチェック、最新1件を取得
-    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={clean_search}&status=any&per_page=1"
+    clean_search = clean_text(title)
+    if len(clean_search) > 50:
+        clean_search = clean_search[:50] 
+
+    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={clean_search}&status=any&per_page=5"
     
     try:
         res = requests.get(endpoint, headers=headers, timeout=10)
         if res.status_code == 200:
             posts = res.json()
             if posts:
-                last_post = posts[0]
-                
-                # 記事の日付を取得 (例: 2026-02-14T12:00:00)
-                post_date_str = last_post['date']
-                try:
-                    post_date = datetime.fromisoformat(post_date_str)
-                    
-                    # 現在時刻との差分を計算
-                    diff = datetime.now() - post_date
-                    
-                    # 30日未満なら重複とみなす
-                    if diff.days < 30:
-                        print(f"   🛑 直近30日以内に類似記事あり ({diff.days}日前): {last_post['title']['rendered']}")
+                for post in posts:
+                    post_date_str = post['date']
+                    try:
+                        post_date = datetime.fromisoformat(post_date_str)
+                        diff = datetime.now() - post_date
+                        
+                        # 3日以内に似た記事があればスキップ
+                        if diff.days < 3:
+                            print(f"   🛑 直近重複あり ({diff.days}日前): {post['title']['rendered'][:20]}...")
+                            return True
+                    except:
                         return True
-                    else:
-                        print(f"   🟢 類似記事ありだが古い ({diff.days}日前) ため作成: {last_post['title']['rendered']}")
-                        return False
-                except:
-                    # 日付パースエラー等の場合は念のため重複扱いにする
-                    return True
+                
+                print(f"   🟢 類似記事はあるが古いので作成許可")
+                return False
     except: pass
     return False
 
@@ -182,24 +177,39 @@ def generate_article_plan(item):
     
     context_text = f"ニュース: {item['title']}\n概要: {item['desc']}\n詳細: {web_desc}\nWiki: {wiki_data}"
 
+    # ★人格設定（極厚版）
     persona_prompt = """
     【コメント生成指示】
-    この記事に対する「読者の反応」を5件生成せよ。以下の人格確率に基づいて演じ分けること。
-    出力はJSONの `comments` 配列に格納すること。
+    この記事に対する「読者のリアルな書き込み」を5件生成し、JSONの `comments` 配列に格納せよ。
+    以下の5人の異なるキャラクターになりきって、文体・語彙・テンションを完全に演じ分けること。
 
-    - **主要人格 (計80%)**:
-      1. 普通: 「〜だね」「〜だと思う」
-      2. 丁寧: 「〜ですね」「〜素晴らしいです」
-      3. 雑・男言葉: 「〜だろ」「〜じゃね？」
-      4. 感情的: 「〜すぎ！」「マジで！？」
-      5. 弱気: 「〜かな？」「〜自信ないけど」
-    
-    - **レア人格 (計20%)**:
-      1. ネットスラング: 「草」「それな」「わかりみが深い」
-      2. 関西弁: 「〜やな」「せやね」「なんでやねん」
-      3. オタク: 「尊い…」「〜なんだよなぁ」「解釈一致」
-      4. ギャル: 「神」「ビジュ良すぎ」「優勝」
-      5. 一言: 「これ。」「はい。」「微妙。」
+    1. **熱狂的な信者 (Fanboy)**:
+       - 非常に興奮しており、ポジティブな言葉しか使わない。
+       - 特徴: ビックリマーク多用、短文。「神」「最高」「待ってた」
+       - 例: 「うおおおおお！マジかこれ！」「絶対買うわ」「覇権確定だろ」
+
+    2. **冷笑的なネット民 (Cynic)**:
+       - 斜に構えており、批判的または冷ややかな態度。
+       - 特徴: ネットスラング（草、〇〇乙）、体言止め。「解散」「はいはい」「微妙」
+       - 例: 「今更感すごいなw」「値段高すぎ、誰が買うの？」「爆死の予感しかしない」
+
+    3. **慎重な分析家 (Analyst)**:
+       - 感情に流されず、スペックやコスパを気にする。
+       - 特徴: 落ち着いた口調、「〜かな」「〜次第」。長文傾向。
+       - 例: 「スペック的には悪くないけど、実機レビュー待ちかな。」「この価格ならアリかも。」
+
+    4. **無知な初心者 (Newbie)**:
+       - ニュースの内容をよく理解していない、または純粋な疑問。
+       - 特徴: 質問系、「〜なの？」。弱気。
+       - 例: 「これって前作やってなくても楽しめる？」「スマホ版は出ないのかな？」
+
+    5. **通りすがりの一般人 (Normal)**:
+       - 特に強い関心はないが、話題だから反応した程度。
+       - 特徴: 普通の丁寧語、または軽い口語。「へー」「〜なんだ」。
+       - 例: 「話題になってるから気になってた。」「面白そうですね。」
+
+    **重要:** - 全員が同じような「〜ですね」口調にならないように注意せよ。
+    - 掲示板やSNSのタイムラインのような「生きた言葉」を使うこと。
     """
 
     prompt = f"""
@@ -222,10 +232,10 @@ def generate_article_plan(item):
 
     3. **選択肢 (items)**: 
        - `name`: 選択肢の名前（例：「プレイする」「スルー」「あり」「なし」）
-       - `text`: **必ず空文字 ("") にしてください。** 解説は不要です。
+       - `text`: **ここには絶対に文字を入れないでください。空文字 ("") にしてください。** - 解説文を入れるとレイアウトが崩れます。
 
     4. **コメント (comments)**:
-       - 記事公開と同時に投稿する「サクラコメント」を5つ必ず生成してください。
+       - 上記の「コメント生成指示」に従い、5つの異なる視点のコメントを生成してください。
 
     【出力形式(JSONのみ)】
     {{
@@ -234,10 +244,10 @@ def generate_article_plan(item):
       "h2_title": "導入見出し",
       "h2_text": "ニュース詳細・特徴を含む充実した本文(400字以上)",
       "fact_h3": "豆知識見出し",
-      "fact_text": "Wiki情報を活用した豆知識(200字程度)",
+      "fact_text": "豆知識(Wikiがない場合は空文字)",
       "items": [
-        {{ "name": "選択肢1(短く)", "text": "" }},
-        {{ "name": "選択肢2(短く)", "text": "" }}
+        {{ "name": "選択肢1(短く)", "text": "" }},  // ← textは必ず空にすること！
+        {{ "name": "選択肢2(短く)", "text": "" }}   // ← textは必ず空にすること！
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -352,7 +362,7 @@ def post_to_wordpress(ai_data):
     post_data = {
         'title': wp_title,
         'content': content,
-        'status': 'publish', # 公開状態で投稿
+        'status': 'publish', 
         'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
         'categories': [cat_id],
         'meta': meta
@@ -407,7 +417,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v46 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v49 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -416,7 +426,7 @@ def main():
     for item in candidates:
         if count >= 3: break
         
-        # タイトルで重複チェック (30日以内)
+        # タイトルで重複チェック
         if check_exists(item['title']):
             continue
             
