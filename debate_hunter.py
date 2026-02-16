@@ -73,6 +73,34 @@ def determine_category(text):
         return "tech"
     return "game"
 
+# ▼【新機能】Wikipediaから概要を取得する関数
+def get_wikipedia_summary(keyword):
+    try:
+        # Wikipedia API (日本語版)
+        url = "https://ja.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "prop": "extracts",
+            "exintro": True,
+            "explaintext": True,
+            "redirects": 1,
+            "titles": keyword
+        }
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+        pages = data.get("query", {}).get("pages", {})
+        
+        for pid, page in pages.items():
+            if pid == "-1": continue # 見つからない場合
+            summary = page.get("extract", "")
+            if summary:
+                # 長すぎる場合はカット
+                return summary[:300] + "..."
+    except:
+        pass
+    return None
+
 def generate_content_data(category, title):
     clean_title = re.sub(r'【.*?】', '', title).split("」")[0].replace("「", "")
     clean_title = re.sub(r'\[.*?\]', '', clean_title).strip()
@@ -126,7 +154,7 @@ def create_post(entry, category):
     
     clean_title, wp_title, options, comments_pool, weights, spec_h2, spec_text = generate_content_data(category, title)
     
-    # 投票データ生成（40〜60票）
+    # 投票データ生成
     initial_votes = [0] * 4
     total_sakura = random.randint(40, 60)
     for _ in range(total_sakura):
@@ -136,17 +164,25 @@ def create_post(entry, category):
     items_str = ",".join([f"{opt}|" for opt in options])
     release_str = extract_release_str(title + description)
     
-    # ★記事本文（フォームと導入のみ）
+    # ★Wikipedia検索
+    wiki_summary = get_wikipedia_summary(clean_title)
+    
+    # 導入文の作成 (Wikiがあれば追加)
+    intro_text = description[:150] + "..."
+    if wiki_summary:
+        intro_text += "\n\n【Wikipedia概要】\n" + wiki_summary
+
+    # 記事本文（フォームと導入のみ）
     content = f"""
 [vote_bar items="{items_str}"]
 [vote_summary items="{items_str}"]
 <p>話題の新作『{clean_title}』について、皆さんの本音を聞かせてください。<br><strong>「期待通り？」それとも「ガッカリ？」</strong><br>忖度なしの評価を投票で決定します！</p>
 """
 
-    # ★詳細情報はメタデータに入れる（これでフォーム下に表示される）
+    # メタデータ
     meta = {
         'wiki_h2_title': f"{clean_title} について",
-        'wiki_h2_text': description[:150] + "...",
+        'wiki_h2_text': intro_text, # ここにWiki情報を結合済み
         
         'wiki_info1_h3': "発売日・リリース時期",
         'wiki_info_1': f"リリース予定: {release_str}",
@@ -157,8 +193,9 @@ def create_post(entry, category):
         'wiki_info3_h3': "みんなの口コミ・評判",
         'wiki_info_3': "SNSや掲示板では既に様々な意見が飛び交っています。\n下のコメント欄で、あなたの率直な意見やリーク情報、感想を書き込んでください。\n匿名で投稿可能です。",
         
-        'wiki_fact_h3': "情報ソース",
-        'wiki_info_fact': f"本記事の情報は以下のニュースソースを参照しています。\n{link}",
+        # 参照元リンクを削除し、純粋な豆知識エリアへ
+        'wiki_fact_h3': "補足情報",
+        'wiki_info_fact': f"『{clean_title}』に関する最新ニュースやアップデート情報は、公式発表をチェックすることをおすすめします。",
 
         'post_views_count': '0'
     }
@@ -172,12 +209,13 @@ def create_post(entry, category):
     status = 'draft'
     post_date = current_time.strftime('%Y-%m-%dT%H:%M:%S')
     
+    # ★カテゴリーをゲーム(ID:1)に固定
     post_data = {
         'title': wp_title,
         'content': content,
         'status': status,
         'date': post_date,
-        'categories': [1],
+        'categories': [1], 
         'meta': meta
     }
 
@@ -213,12 +251,12 @@ def post_sakura_comment(post_id, comments_pool):
 def send_discord(title, cat, status):
     if not DISCORD_WEBHOOK_URL or "ここに" in DISCORD_WEBHOOK_URL: return
     status_ja = {'publish': '🚀 即時公開', 'future': '📅 予約投稿', 'draft': '📝 下書き'}.get(status, status)
-    msg = f"🔥 **{cat.upper()}議論記事を作成**\n**題名:** {title}\n**状態:** {status_ja}\n{WP_URL}/wp-admin/"
+    msg = f"🆕 **{cat.upper()}記事を作成**\n**題名:** {title}\n**状態:** {status_ja}\n{WP_URL}/wp-admin/"
     try: requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
     except: pass
 
 def main():
-    print("🤖 議論ハンター(debate_hunter) 起動")
+    print("🤖 議論ハンター(debate_hunter) v15 起動")
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
     total = 0
     for rss in RSS_URLS:
