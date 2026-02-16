@@ -26,8 +26,8 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定 (ご指定のGemini 2.5 Proに変更)
-MODEL_NAME = "gemini-2.5-pro"
+# ★モデル設定 (画像の通りに設定)
+MODEL_NAME = "gemini-2.5-pro" 
 
 # ★カテゴリーID設定
 CATEGORY_IDS = {
@@ -57,7 +57,6 @@ RSS_URLS = [
     "https://mantan-web.jp/rss/rss.xml"
 ]
 
-# NGワード・ターゲットワード
 NG_WORDS = ["セール", "決算", "インタビュー", "レポート", "舞台", "オーディション", "求人", "人事", "放送", "プレゼント", "まとめ", "訃報", "死去", "ご冥福", "亡く", "逝去"]
 TARGET_WORDS = ["発売", "リリース", "決定", "発表", "開始", "新商品", "新メニュー", "公開", "実写化", "映画化", "アニメ化", "検討", "方針", "批判", "物議", "炎上", "逮捕", "容疑", "可決", "辞任", "疑惑", "増税", "義務化", "中止", "話題"]
 
@@ -154,7 +153,7 @@ def get_wikipedia_data(keyword):
 # --- 3. AI編集長による企画・記事作成 ---
 
 def generate_article_plan(item):
-    print(f"   🧠 AI編集長が企画中: {item['title'][:20]}...")
+    print(f"   🧠 AI編集長が企画中 (Model: {MODEL_NAME}): {item['title'][:20]}...")
     
     web_desc = fetch_web_info(item['link'])
     wiki_data = get_wikipedia_data(item['title'])
@@ -217,7 +216,6 @@ def generate_article_plan(item):
     headers = {'Content-Type': 'application/json'}
     data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
     
-    # 自動リトライ機能 (429エラー対策)
     max_retries = 2
     for attempt in range(max_retries):
         try:
@@ -230,13 +228,17 @@ def generate_article_plan(item):
                 return json.loads(text[start:end])
             elif res.status_code == 429:
                 if attempt < max_retries - 1:
-                    print("   ⚠️ API制限(429)。60秒待機して再試行...")
-                    time.sleep(60)
+                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。60秒待機して再試行...")
+                    time.sleep(60) # ★60秒しっかり待つ
                 else:
-                    print("   ❌ API制限でスキップ")
+                    print(f"   ❌ API制限が厳しいため、このモデル ({MODEL_NAME}) では連続生成できません。")
                     return None
             else:
-                print(f"   ❌ API Error ({res.status_code})")
+                try:
+                    err_msg = res.json().get('error', {}).get('message', '詳細なし')
+                    print(f"   ❌ API Error ({res.status_code}): {err_msg}")
+                except:
+                    print(f"   ❌ API Error ({res.status_code}): {res.text}")
                 return None
         except Exception as e:
             print(f"   ❌ 通信エラー: {e}")
@@ -335,7 +337,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v32 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v35 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -354,8 +356,10 @@ def main():
                 count += 1
                 try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
                 except: pass
-                
-        time.sleep(15)
+        
+        # Proモデルは制限がきついため、記事作成の間隔も長めに取る
+        print("   ☕ 休憩中(60s)...")
+        time.sleep(60)
 
     print(f"\n🏁 完了: {count}件作成")
 
