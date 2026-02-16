@@ -17,7 +17,7 @@ WP_APP_PASS = os.environ.get("WP_APP_PASS")
 # Discord Webhook URL
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# 情報源リスト
+# 情報源リスト (Debate用: ゲーム・ガジェット・グルメ)
 RSS_URLS = [
     "https://www.4gamer.net/rss/index.xml",           # ゲーム
     "https://www.gizmodo.jp/index.xml",               # ガジェット
@@ -50,9 +50,7 @@ def check_exists(title):
         res = requests.get(endpoint, headers=headers, timeout=10)
         if res.status_code == 200:
             for post in res.json():
-                existing_title = post['title']['rendered']
-                if clean_search in existing_title:
-                    return True
+                if clean_search in post['title']['rendered']: return True
     except: pass
     return False
 
@@ -91,7 +89,7 @@ def generate_content_data(category, title):
             "想像通りの味だった", "コスパは微妙かな", "温かいうちに食べるのがおすすめ"
         ]
         spec_h2 = "カロリー・価格情報"
-        spec_text = "気になるカロリーや最新の価格情報は、公式サイトまたは店頭の表示をご確認ください。<br>期間限定メニューの場合、早期終了の可能性もあるためご注意ください。"
+        spec_text = "気になるカロリーや最新の価格情報は、公式サイトまたは店頭の表示をご確認ください。\n期間限定メニューの場合、早期終了の可能性もあるためご注意ください。"
 
     elif category == "tech":
         wp_title = f"【評価】『{clean_title}』は買いか？コスパと性能を議論するスレ"
@@ -104,7 +102,7 @@ def generate_content_data(category, title):
             "競合製品の方がコスパいいかも", "信者アイテム乙", "色が微妙なんだよなぁ"
         ]
         spec_h2 = "スペック・発売価格"
-        spec_text = "詳細な技術仕様（スペック）や国内販売価格については、メーカー公式発表をご確認ください。<br>予約開始日や発売日についても随時更新予定です。"
+        spec_text = "詳細な技術仕様（スペック）や国内販売価格については、メーカー公式発表をご確認ください。\n予約開始日や発売日についても随時更新予定です。"
 
     else:
         wp_title = f"【評価】『{clean_title}』は神ゲー？クソゲー？本音評価まとめ"
@@ -128,6 +126,7 @@ def create_post(entry, category):
     
     clean_title, wp_title, options, comments_pool, weights, spec_h2, spec_text = generate_content_data(category, title)
     
+    # 投票データ生成（40〜60票）
     initial_votes = [0] * 4
     total_sakura = random.randint(40, 60)
     for _ in range(total_sakura):
@@ -137,28 +136,33 @@ def create_post(entry, category):
     items_str = ",".join([f"{opt}|" for opt in options])
     release_str = extract_release_str(title + description)
     
+    # ★記事本文（フォームと導入のみ）
     content = f"""
 [vote_bar items="{items_str}"]
 [vote_summary items="{items_str}"]
 <p>話題の新作『{clean_title}』について、皆さんの本音を聞かせてください。<br><strong>「期待通り？」それとも「ガッカリ？」</strong><br>忖度なしの評価を投票で決定します！</p>
-<h2>{clean_title} とは？</h2>
-<p>{description}</p>
-<h2>発売日・リリース時期</h2>
-<p>リリース予定: <strong>{release_str}</strong></p>
-<h2>{spec_h2}</h2>
-<p>{spec_text}</p>
-<h2>みんなの口コミ・評判（議論・レスバ歓迎）</h2>
-<p>SNSや掲示板では既に様々な意見が飛び交っています。<br>
-下のコメント欄で、あなたの率直な意見やリーク情報、感想を書き込んでください。<br>
-匿名で投稿可能です。</p>
-<p><a href="{link}" target="_blank" rel="noopener">情報元で全文を読む</a></p>
 """
 
+    # ★詳細情報はメタデータに入れる（これでフォーム下に表示される）
     meta = {
         'wiki_h2_title': f"{clean_title} について",
-        'wiki_h2_text': description[:100] + "...",
+        'wiki_h2_text': description[:150] + "...",
+        
+        'wiki_info1_h3': "発売日・リリース時期",
+        'wiki_info_1': f"リリース予定: {release_str}",
+        
+        'wiki_info2_h3': spec_h2,
+        'wiki_info_2': spec_text,
+        
+        'wiki_info3_h3': "みんなの口コミ・評判",
+        'wiki_info_3': "SNSや掲示板では既に様々な意見が飛び交っています。\n下のコメント欄で、あなたの率直な意見やリーク情報、感想を書き込んでください。\n匿名で投稿可能です。",
+        
+        'wiki_fact_h3': "情報ソース",
+        'wiki_info_fact': f"本記事の情報は以下のニュースソースを参照しています。\n{link}",
+
         'post_views_count': '0'
     }
+
     for i, opt in enumerate(options, 1):
         meta[f'wiki_item_name_{i}'] = opt
         meta[f'wiki_item_img_{i}'] = ""
@@ -209,7 +213,7 @@ def post_sakura_comment(post_id, comments_pool):
 def send_discord(title, cat, status):
     if not DISCORD_WEBHOOK_URL or "ここに" in DISCORD_WEBHOOK_URL: return
     status_ja = {'publish': '🚀 即時公開', 'future': '📅 予約投稿', 'draft': '📝 下書き'}.get(status, status)
-    msg = f"🆕 **{cat.upper()}記事を作成**\n**題名:** {title}\n**状態:** {status_ja}\n{WP_URL}/wp-admin/"
+    msg = f"🔥 **{cat.upper()}議論記事を作成**\n**題名:** {title}\n**状態:** {status_ja}\n{WP_URL}/wp-admin/"
     try: requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
     except: pass
 
