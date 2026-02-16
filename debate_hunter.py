@@ -13,43 +13,34 @@ from datetime import datetime, timedelta
 # ==========================================
 # ★設定エリア
 # ==========================================
-# 環境変数が空の場合のバックアップ値を設定
 WP_URL_DEFAULT = "https://docchiyo.com"
 WP_USER_DEFAULT = "bear"
 
-# 環境変数を取得し、空ならデフォルト値を使用
 WP_URL = os.environ.get("WP_URL")
-if not WP_URL:
-    WP_URL = WP_URL_DEFAULT
+if not WP_URL: WP_URL = WP_URL_DEFAULT
 
 WP_USER = os.environ.get("WP_USER")
-if not WP_USER:
-    WP_USER = WP_USER_DEFAULT
+if not WP_USER: WP_USER = WP_USER_DEFAULT
 
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# エラーチェック
 if not WP_APP_PASS or not GEMINI_API_KEY:
     print("❌ エラー: 環境変数 (WP_APP_PASS, GEMINI_API_KEY) が読み込めません。")
     sys.exit(1)
 
-# Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# ★モデル設定 (実績のあるGemma 3)
-MODEL_NAME = "gemma-3-27b-it"
+# ★モデル設定: 実績のある Gemma 3
+MODEL_NAME = "gemma-3-27b-it" 
 
-# ★カテゴリーID設定
 CATEGORY_IDS = {
     "social": 194, "food": 11, "tech": 24,
     "anime": 155, "entame": 95, "game": 13
 }
 
-# ユーザーエージェント
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
 
-# コンプラ回避設定
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -57,7 +48,6 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
 ]
 
-# RSSリスト
 RSS_URLS = [
     "https://news.yahoo.co.jp/rss/topics/dom.xml",
     "https://news.yahoo.co.jp/rss/topics/ent.xml",
@@ -104,10 +94,9 @@ def check_exists(title):
 # --- 1. トレンド収集 ---
 
 def get_trends():
-    print("📈 トレンド収集中...", end="")
+    print("📈 トレンド収集中 (Google & RSS)...", end="")
     items = []
     
-    # Google Trends
     try:
         url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=all&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -123,7 +112,6 @@ def get_trends():
                     items.append({"title": title, "desc": desc, "link": link})
     except: pass
 
-    # RSS
     for url in RSS_URLS:
         try:
             feed = feedparser.parse(url)
@@ -173,10 +161,13 @@ def generate_article_plan(item):
 
     persona_prompt = """
     【コメント生成指示】
-    この記事に対する「読者の反応」を5〜8件生成せよ。以下の人格確率に基づいて演じ分けること。
-    出力形式は必ずJSONの `comments` 配列の中に `{"name": "匿名", "content": "本文"}` の形で入れること。
-    - **主要人格**: 普通、丁寧、雑・男言葉、感情的、弱気
-    - **レア人格**: ネットスラング、関西弁、オタク、ギャル、一言
+    この記事に対する「読者の反応」を5件生成せよ。JSONの `comments` 配列に格納すること。
+    以下の人格を使い分けること：
+    - 普通: 「〜だね」「〜かも」
+    - 丁寧: 「〜ですね」「〜と思います」
+    - 雑: 「〜だろ」「〜じゃね？」
+    - 興奮: 「〜すぎ！」「マジで」
+    - ネット民: 「草」「それな」
     """
 
     prompt = f"""
@@ -186,32 +177,38 @@ def generate_article_plan(item):
     【入力情報】
     {context_text}
 
-    【★企画ルール：ここを間違えないでください】
+    【★企画ルール：厳守】
     
     1. **タイトル (title)**: 
-       - 必ず**「〜はどっち？」「〜あり？なし？」「〜買う？見送る？」「〜は誰？」**のように、読者に問いかける形式にしてください。
-       - 「〇〇が発売」のような単なるニュース見出しは**不可**です。
+       - **「説明的なニュース見出し」＋「問いかけ」** の形にしてください。
+       - 短すぎるタイトルはNGです。具体的に書いてください。
+       - OK例: 「【Steam新作】画面端でポーカー？放置系デッキ構築『Card Corner』は買い？見送り？」
+       - OK例: 「【物議】〇〇が△△を批判！この発言は正論？それとも暴言？」
 
-    2. **選択肢の解説 (text)**: 
-       - **「用語の説明」は禁止です。**（例: 「買うとは購入することです」→ NG）
-       - その選択肢を選ぶべき**「理由」や「アピールポイント」**を書いてください。
-       - 例（買う場合）: 「前作からグラフィックが大幅進化。シリーズファンなら間違いなく買い。」
-       - 例（なしの場合）: 「時期尚早という印象。もう少し議論が尽くされるのを待ちたい。」
+    2. **記事本文 (h2_text)**:
+       - **ここを記事のメインにしてください。**
+       - ニュースの内容、スペック、背景、何が話題なのかを詳細に（400文字程度）書いてください。
+       - 読者がこれを読めば判断できるように情報を網羅してください。
 
-    3. **コメント (comments)**:
-       - 実際に掲示板に書き込まれていそうな、リアルで短い反応を作ってください。
+    3. **選択肢のテキスト (text)**: 
+       - **「用語解説」や「〜するということです」のような説明は一切禁止です。**
+       - 読者がその選択肢を選ぶ際の「決め手」を一言で書いてください。（空欄でも構いません）
+       - 例: 「シリーズファンなら即買い。」「様子見してセール待ち。」
+
+    4. **コメント (comments)**:
+       - 記事公開と同時に投稿する「サクラコメント」を5つ必ず生成してください。
 
     【出力形式(JSONのみ)】
     {{
       "category": "social/food/tech/anime/entame/game のいずれか",
-      "title": "記事タイトル（問いかけ形式）",
-      "h2_title": "導入見出し（例：〇〇がついに解禁！あなたは...？）",
-      "h2_text": "ニュース詳細を含む導入本文(400字程度)",
+      "title": "具体的で長いタイトル＋問いかけ",
+      "h2_title": "導入見出し",
+      "h2_text": "ニュース詳細を含む充実した本文(400字以上)",
       "fact_h3": "豆知識見出し",
       "fact_text": "Wiki情報を活用した豆知識(200字程度)",
       "items": [
-        {{ "name": "選択肢1(短く)", "text": "なぜこれを選ぶのか？という強い理由(100字程度)" }},
-        {{ "name": "選択肢2(短く)", "text": "なぜこれを選ぶのか？という強い理由(100字程度)" }}
+        {{ "name": "選択肢1", "text": "短いアピールポイント(20字以内)" }},
+        {{ "name": "選択肢2", "text": "短いアピールポイント(20字以内)" }}
       ],
       "comments": [
           {{ "name": "匿名", "content": "コメント本文1" }},
@@ -251,24 +248,27 @@ def generate_article_plan(item):
             return None
     return None
 
-# --- 4. コメント投稿関数（独立化） ---
+# --- 4. コメント投稿関数 ---
 def post_comment_to_wp(pid, name, content):
     url = f"{WP_URL}/wp-json/wp/v2/comments"
     headers = get_auth_header()
-    # 投稿時間を少し過去にずらす（自然に見せるため）
+    # 投稿時間を少しばらけさせる
     c_dt = datetime.now() - timedelta(minutes=random.randint(5, 120))
     data = {
         'post': pid,
         'author_name': name,
         'content': content,
-        'status': 'approve',
+        'status': 'approve', # 即時承認
         'date': c_dt.isoformat()
     }
     try:
         res = requests.post(url, headers=headers, json=data, timeout=10)
-        return res.status_code == 201
-    except:
-        return False
+        if res.status_code == 201:
+            return True, ""
+        else:
+            return False, f"{res.status_code} {res.text}"
+    except Exception as e:
+        return False, str(e)
 
 # --- 5. WordPress投稿 ---
 
@@ -334,15 +334,16 @@ def post_to_wordpress(ai_data):
         res = requests.post(f"{WP_URL}/wp-json/wp/v2/posts", headers=get_auth_header(), json=post_data, timeout=30)
         if res.status_code == 201:
             pid = res.json()['id']
-            print(f"   ✅ 投稿成功: {wp_title[:15]}... (ID:{pid})")
+            print(f"   ✅ 投稿成功: {wp_title[:20]}... (ID:{pid})")
             
-            # --- コメント投稿処理 (確実版) ---
-            print("   💬 コメント投稿中...", end="")
+            # --- コメント投稿処理 (デバッグ強化版) ---
+            print("   💬 コメント投稿開始...")
             
             comments_list = ai_data.get('comments', [])
             
-            # AIがコメントを生成しなかった場合の予備リスト
-            if not comments_list or not isinstance(comments_list, list):
+            # AIが空っぽで返してきた場合の緊急バックアップ
+            if not comments_list:
+                print("   ⚠️ AIコメント生成なし -> バックアップを使用")
                 comments_list = [
                     {"name": "匿名", "content": "これは気になる！"},
                     {"name": "匿名", "content": "様子見かなあ。"},
@@ -362,11 +363,15 @@ def post_to_wordpress(ai_data):
                     c_name = c.get('name', '匿名')
                 
                 if c_content:
-                    if post_comment_to_wp(pid, c_name, c_content):
+                    success, msg = post_comment_to_wp(pid, c_name, c_content)
+                    if success:
                         success_c += 1
-                    time.sleep(1) # 連投規制回避
+                        print(f"      - OK: {c_content[:15]}...")
+                    else:
+                        print(f"      - NG: {msg}")
+                    time.sleep(1) 
             
-            print(f" 完了 ({success_c}件)")
+            print(f"   🏁 コメント完了 ({success_c}件)")
             return True
         else:
             print(f"   ❌ WP投稿失敗: {res.status_code} {res.text}")
@@ -378,7 +383,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v40 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v41 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
