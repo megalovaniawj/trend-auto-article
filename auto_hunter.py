@@ -186,7 +186,6 @@ def create_post(entry):
     
     billing_text = "基本プレイ無料（アイテム課金制）" if game_type == "f2p" else "パッケージ・ダウンロード販売"
     
-    # ▼【修正】コンテンツの順番を「フォーム → テキスト」に完全変更
     content = f"""
 [vote_bar items="{items_str}"]
 [vote_summary items="{items_str}"]
@@ -256,7 +255,10 @@ def create_post(entry):
 
 def post_sakura_comment(post_id, comments):
     if not comments: return
-    selected = random.sample(comments, k=random.randint(1, 2))
+    # ▼【修正】1〜3件の間でランダムに投稿数を決定
+    count_limit = min(len(comments), random.randint(1, 3))
+    selected = random.sample(comments, k=count_limit)
+    
     url = f"{WP_URL}/wp-json/wp/v2/comments"
     headers = get_auth_header()
     if not headers: return
@@ -271,7 +273,7 @@ def post_sakura_comment(post_id, comments):
 
 def main():
     print("--------------------------------------------------")
-    print("🤖 ゲームハンター(自動投稿ロボ v9) 起動！")
+    print("🤖 ゲームハンター(自動投稿ロボ v10) 起動！")
     
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
     total_created = 0
