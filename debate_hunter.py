@@ -26,10 +26,10 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# モデル設定
-MODEL_NAME = "gemini-2.0-flash" 
+# ★モデル設定 (ご指定のGemini 2.5 Proに変更)
+MODEL_NAME = "gemini-2.5-pro"
 
-# ★カテゴリーID設定 (確認済みID)
+# ★カテゴリーID設定
 CATEGORY_IDS = {
     "social": 194, "food": 11, "tech": 24,
     "anime": 155, "entame": 95, "game": 13
@@ -117,7 +117,7 @@ def get_trends():
     for url in RSS_URLS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:2]: # 拾える数を少し増やす
+            for entry in feed.entries[:2]: 
                 title = clean_text(entry.title)
                 if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
                     items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
@@ -217,7 +217,7 @@ def generate_article_plan(item):
     headers = {'Content-Type': 'application/json'}
     data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
     
-    # ★追加：エラー発生時に自動リトライ（待機）するロジック
+    # 自動リトライ機能 (429エラー対策)
     max_retries = 2
     for attempt in range(max_retries):
         try:
@@ -228,19 +228,15 @@ def generate_article_plan(item):
                 start = text.find('{')
                 end = text.rfind('}') + 1
                 return json.loads(text[start:end])
-            elif res.status_code == 429: # 制限エラー
+            elif res.status_code == 429:
                 if attempt < max_retries - 1:
-                    print("   ⚠️ API制限(429)を検知。60秒待機してから再挑戦します...")
+                    print("   ⚠️ API制限(429)。60秒待機して再試行...")
                     time.sleep(60)
                 else:
-                    print("   ❌ API制限が解除されないため、この記事はスキップします。")
+                    print("   ❌ API制限でスキップ")
                     return None
             else:
-                try:
-                    err_msg = res.json().get('error', {}).get('message', '不明なエラー')
-                    print(f"   ❌ APIエラー ({res.status_code}): {err_msg}")
-                except:
-                    print(f"   ❌ APIエラー ({res.status_code})")
+                print(f"   ❌ API Error ({res.status_code})")
                 return None
         except Exception as e:
             print(f"   ❌ 通信エラー: {e}")
@@ -259,7 +255,6 @@ def post_to_wordpress(ai_data):
     wp_title = ai_data.get('title')
     items = ai_data.get('items', [])
     
-    # 選択肢がない場合はスキップ
     if len(items) < 2:
         print("   ⚠️ 選択肢不足のためスキップ")
         return False
@@ -305,7 +300,7 @@ def post_to_wordpress(ai_data):
     post_data = {
         'title': wp_title,
         'content': content,
-        'status': 'draft', # ★下書き保存
+        'status': 'draft', 
         'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
         'categories': [cat_id],
         'meta': meta
@@ -340,7 +335,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print("🤖 トレンド・ハンター v31 (スマートログ版) 起動")
+    print(f"🤖 トレンド・ハンター v32 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -360,7 +355,6 @@ def main():
                 try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
                 except: pass
                 
-        # 連続実行によるAPIエラーを防ぐため、1記事ごとに15秒休む
         time.sleep(15)
 
     print(f"\n🏁 完了: {count}件作成")
