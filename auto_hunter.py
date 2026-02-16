@@ -14,10 +14,10 @@ WP_URL = os.environ.get("WP_URL", "https://docchiyo.com")
 WP_USER = os.environ.get("WP_USER", "bear")
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 
-# Discord Webhook URL (前回いただいたもの)
+# Discord Webhook URL
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
-# PR TIMES RSS
+# PR TIMES RSS (ゲーム・おもちゃカテゴリ)
 RSS_URL = "https://prtimes.jp/companyrss.php?c_id=24"
 
 # 除外ワード
@@ -230,17 +230,28 @@ def main():
     print("--------------------------------------------------")
     print("🤖 ゲームハンター(自動投稿ロボ) 起動！")
     print("📡 PR TIMESから最新ニュースを取得しています...")
-    print("--------------------------------------------------")
+    
+    # ▼【修正】ブラウザのふりをしてアクセスする設定を追加
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     
     try:
-        feed = feedparser.parse(RSS_URL)
+        # requestsを使ってデータを取得し、それをfeedparserに渡す
+        response = requests.get(RSS_URL, headers=headers, timeout=10)
+        print(f"   ↪︎ サーバー応答: {response.status_code}") # 200ならOK
+        
+        feed = feedparser.parse(response.content)
     except Exception as e:
         print(f"❌ RSSの取得に失敗しました: {e}")
         return
 
     if not feed.entries:
-        print("⚠️ ニュースが1件も取得できませんでした。")
+        print("⚠️ ニュースが1件も取得できませんでした。（RSSが空か、ブロックされています）")
         return
+
+    print(f"   ↪︎ {len(feed.entries)} 件のニュースを取得しました。チェックを開始します。")
+    print("--------------------------------------------------")
 
     count = 0
     checked_count = 0
