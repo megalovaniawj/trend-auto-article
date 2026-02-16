@@ -2,11 +2,9 @@ name: Debate Hunter
 
 on:
   schedule:
-    # 日本時間 朝6時 (UTC 21:00)
-    - cron: '0 21 * * *'
-    # 日本時間 夕方18時 (UTC 09:00)
-    - cron: '0 9 * * *'
-  workflow_dispatch: # 手動実行ボタン
+    - cron: '0 21 * * *' # 日本時間 朝6時
+    - cron: '0 9 * * *'  # 日本時間 夕18時
+  workflow_dispatch:
 
 jobs:
   build:
@@ -24,11 +22,14 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install feedparser requests
+        # duckduckgo-searchなどを追加
+        pip install feedparser requests duckduckgo-search
 
     - name: Run Debate Script
       env:
-        # パスワードのみSecretsから読み込み（URLとユーザー名はPython側のデフォルトを使用）
+        # ★ここでSecretsをPythonに渡します（これが抜けているとエラーになります）
+        WP_URL: ${{ secrets.WP_URL }} # もし設定していれば
+        WP_USER: ${{ secrets.WP_USER }} # もし設定していれば
         WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-      # ▼ここで新しいファイル(debate_hunter.py)を実行します
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} 
       run: python debate_hunter.py
