@@ -28,7 +28,7 @@ jobs:
 
     - name: Run Debate Script
       env:
-        # 共通のSecrets（パスワード）を使います
+        # パスワードのみSecretsから読み込み（URLとユーザー名はPython側のデフォルトを使用）
         WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
       # ▼ここで新しいファイル(debate_hunter.py)を実行します
       run: python debate_hunter.py
