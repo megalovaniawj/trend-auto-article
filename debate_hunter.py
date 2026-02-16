@@ -77,19 +77,14 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# ★重複チェック機能 (賢い検索版)
+# 重複チェック機能
 def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
     
+    # 検索ヒット率を上げるため、特徴的な単語のみで検索
     clean_title = clean_text(title)
-    
-    # 戦略: タイトルから「カタカナ」や「英数字」の長い単語を抽出して検索する
-    # 例: "Card Corner 発売" -> "Card Corner" で検索
-    # これにより、表記ゆれがあってもヒットしやすくする
     keywords = re.findall(r'[a-zA-Z0-9]+|[ァ-ンー]{3,}', clean_title)
-    
-    # キーワードが見つかれば一番長いのを使う、なければ先頭15文字
     if keywords:
         search_query = max(keywords, key=len)
     else:
@@ -104,14 +99,11 @@ def check_exists(title):
         if res.status_code == 200:
             posts = res.json()
             if posts:
-                # ヒットした記事の中に、30日以内のものがあるかチェック
                 for post in posts:
                     try:
                         post_date = datetime.fromisoformat(post['date'])
                         diff = datetime.now() - post_date
-                        
-                        # 30日以内なら重複とみなす
-                        if diff.days < 30:
+                        if diff.days < 30: # 30日以内なら重複とみなす
                             print(f" -> 🛑 あり ({diff.days}日前): {post['title']['rendered'][:10]}...")
                             return True
                     except: pass
@@ -195,15 +187,13 @@ def generate_article_plan(item):
     persona_prompt = """
     【コメント生成指示】
     この記事に対する「読者のリアルな書き込み」を5件生成し、JSONの `comments` 配列に格納せよ。
-    以下の5人の異なるキャラクターになりきること。
+    以下の5人のキャラクターになりきり、口調やテンションを完全に演じ分けること。
 
-    1. **熱狂的な信者**: ビックリマーク多用、ポジティブ。「神」「最高」「待ってた」
-    2. **冷笑的なネット民**: 斜に構えた態度、ネットスラング。「草」「微妙」「解散」
-    3. **慎重な分析家**: スペックやコスパを気にする。「〜かな」「〜次第」「レビュー待ち」
-    4. **無知な初心者**: 純粋な疑問。「これ何？」「面白そう」「誰か教えて」
-    5. **通りすがりの一般人**: 普通の反応。「へー」「話題だね」
-    
-    ※口調は自然な日本語で、掲示板のような短文を心がけること。
+    1. **熱狂的な信者**: 「うおおお！神！」「絶対買う」「覇権確定」 (短文、勢い重視)
+    2. **冷笑的なネット民**: 「はいはい解散」「今更感w」「爆死臭がする」 (スラング、煽り)
+    3. **慎重な分析家**: 「スペック的には...」「コスパ次第かな」「レビュー待ち」 (冷静、長文可)
+    4. **無知な初心者**: 「これ何？」「面白そう」「誰か教えて」 (質問、弱気)
+    5. **通りすがりの一般人**: 「話題だね」「へー」 (無関心、相槌)
     """
 
     prompt = f"""
@@ -216,19 +206,19 @@ def generate_article_plan(item):
     【★企画ルール：厳守】
     
     1. **タイトル (title)**: 
-       - **「具体的なニュース事実」＋「短い問いかけ」** の形式。
+       - 「具体的なニュース事実」＋「短い問いかけ」
        - 例: 「〇〇が発売！あなたは買う？見送る？」
 
     2. **記事本文 (h2_text)**:
-       - **ここに「議題の特徴・詳細」を全て記述してください。**
-       - 選択肢の説明欄を使わないため、この本文だけで読者が内容を理解できるように、400文字程度で詳しく解説してください。
+       - **ここに「議題のコンテンツ（詳細）」を全て記述してください。**
+       - 選択肢の欄には何も書かないため、この本文だけで読者が内容（スペック、価格、魅力、背景）を完全に理解できるように、400文字程度で詳しく解説してください。
 
     3. **選択肢 (items)**: 
-       - `name`: 選択肢の名前（例：「プレイする」「スルー」「あり」「なし」）
-       - **重要: `text` (解説) フィールドは出力しないでください。名前だけでOKです。**
+       - `name`: 選択肢の名前のみ（例：「プレイする」「スルー」「あり」「なし」）。
+       - **解説文 (text) は不要です。絶対に作成しないでください。**
 
     4. **コメント (comments)**:
-       - 5つの異なる視点のコメントを生成してください。
+       - 上記の「コメント生成指示」に従い、5つの異なる視点のコメントを生成してください。
 
     【出力形式(JSONのみ)】
     {{
@@ -269,7 +259,7 @@ def generate_article_plan(item):
                 return json.loads(text[start:end])
             elif res.status_code == 429:
                 if attempt < max_retries - 1:
-                    print(f"   ⚠️ API制限 (Model: {MODEL_NAME})。20秒待機...")
+                    print(f"   ⚠️ API制限。20秒待機...")
                     time.sleep(20) 
                 else:
                     return None
@@ -316,10 +306,10 @@ def post_to_wordpress(ai_data):
 
     items_str = ",".join([f"{item['name']}|" for item in items])
     
+    # ★修正: 定型文を削除し、投票バーとサマリーのみにする
     content = f"""
 [vote_bar items="{items_str}"]
 [vote_summary items="{items_str}"]
-<p>話題のニュースについて、皆さんの意見を聞かせてください。<br><strong>あなたの「一票」が世論を作ります！</strong></p>
 """
 
     meta = {
@@ -337,8 +327,8 @@ def post_to_wordpress(ai_data):
         idx = i + 1
         meta[f'wiki_item_name_{idx}'] = item['name']
         meta[f'wiki_item_img_{idx}'] = ""
-        meta[f'wiki_info{idx}_h3'] = item['name']
-        # ★ textキー自体をAIから要求していないため、ここは完全に空文字固定
+        # ★重要: ここで見出し(h3)と本文(info)を完全に空にする
+        meta[f'wiki_info{idx}_h3'] = "" 
         meta[f'wiki_info_{idx}'] = "" 
         
     weights = [50, 30, 10, 5, 5] + [1] * 5
@@ -368,7 +358,6 @@ def post_to_wordpress(ai_data):
             pid = res.json()['id']
             print(f"   ✅ 投稿成功 (公開): {wp_title[:20]}... (ID:{pid})")
             
-            # --- コメント投稿処理 ---
             print("   💬 コメント投稿中...", end="")
             
             comments_list = ai_data.get('comments', [])
@@ -411,7 +400,7 @@ def post_to_wordpress(ai_data):
 # メイン処理
 # ==========================================
 def main():
-    print(f"🤖 トレンド・ハンター v51 (Model: {MODEL_NAME}) 起動")
+    print(f"🤖 トレンド・ハンター v52 (Model: {MODEL_NAME}) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -420,7 +409,7 @@ def main():
     for item in candidates:
         if count >= 3: break
         
-        # タイトル重複チェック
+        # 重複チェック
         if check_exists(item['title']):
             continue
             
