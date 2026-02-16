@@ -21,7 +21,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # エラーチェック
 if not WP_APP_PASS or not GEMINI_API_KEY:
     print("❌ エラー: 環境変数 (WP_APP_PASS, GEMINI_API_KEY) が読み込めません。")
-    # YAMLの設定は合っているので、GitHub Secretsに値が入っているか確認してください
     sys.exit(1)
 
 # Discord Webhook
@@ -78,7 +77,6 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# ★重要: これが抜けていたためエラーになっていました。追加済みです。
 def check_exists(title):
     headers = get_auth_header()
     if not headers: return False
@@ -119,7 +117,7 @@ def get_trends():
     for url in RSS_URLS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:1]: # 各1件
+            for entry in feed.entries[:2]: # 拾える数を少し増やす
                 title = clean_text(entry.title)
                 if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
                     items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
@@ -153,17 +151,16 @@ def get_wikipedia_data(keyword):
     except: pass
     return None
 
-# --- 3. AI編集長による企画・記事作成 (main.py + PHP人格) ---
+# --- 3. AI編集長による企画・記事作成 ---
 
 def generate_article_plan(item):
-    print(f"   🧠 AI編集長が企画中: {item['title']}...")
+    print(f"   🧠 AI編集長が企画中: {item['title'][:20]}...")
     
     web_desc = fetch_web_info(item['link'])
     wiki_data = get_wikipedia_data(item['title'])
     
     context_text = f"ニュース: {item['title']}\n概要: {item['desc']}\n詳細: {web_desc}\nWiki: {wiki_data}"
 
-    # ★PHPの人格ロジックをプロンプトに統合
     persona_prompt = """
     【コメント生成指示】
     この記事に対する「読者の反応」を5〜8件生成せよ。以下の人格確率に基づいて演じ分けること。
@@ -220,18 +217,35 @@ def generate_article_plan(item):
     headers = {'Content-Type': 'application/json'}
     data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
     
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=60)
-        if res.status_code == 200:
-            text = res.json()['candidates'][0]['content']['parts'][0]['text']
-            text = text.replace('```json', '').replace('```', '').strip()
-            start = text.find('{')
-            end = text.rfind('}') + 1
-            return json.loads(text[start:end])
-        else:
-            print(f"API Error: {res.text}")
-    except Exception as e:
-        print(f"Generate Error: {e}")
+    # ★追加：エラー発生時に自動リトライ（待機）するロジック
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            res = requests.post(url, headers=headers, json=data, timeout=60)
+            if res.status_code == 200:
+                text = res.json()['candidates'][0]['content']['parts'][0]['text']
+                text = text.replace('```json', '').replace('```', '').strip()
+                start = text.find('{')
+                end = text.rfind('}') + 1
+                return json.loads(text[start:end])
+            elif res.status_code == 429: # 制限エラー
+                if attempt < max_retries - 1:
+                    print("   ⚠️ API制限(429)を検知。60秒待機してから再挑戦します...")
+                    time.sleep(60)
+                else:
+                    print("   ❌ API制限が解除されないため、この記事はスキップします。")
+                    return None
+            else:
+                try:
+                    err_msg = res.json().get('error', {}).get('message', '不明なエラー')
+                    print(f"   ❌ APIエラー ({res.status_code}): {err_msg}")
+                except:
+                    print(f"   ❌ APIエラー ({res.status_code})")
+                return None
+        except Exception as e:
+            print(f"   ❌ 通信エラー: {e}")
+            return None
+            
     return None
 
 # --- 4. WordPress投稿 ---
@@ -242,7 +256,7 @@ def post_to_wordpress(ai_data):
     cat_slug = ai_data.get('category', 'social')
     cat_id = CATEGORY_IDS.get(cat_slug, 194)
     
-    wp_title = ai_data['title']
+    wp_title = ai_data.get('title')
     items = ai_data.get('items', [])
     
     # 選択肢がない場合はスキップ
@@ -301,9 +315,9 @@ def post_to_wordpress(ai_data):
         res = requests.post(f"{WP_URL}/wp-json/wp/v2/posts", headers=get_auth_header(), json=post_data, timeout=30)
         if res.status_code == 201:
             pid = res.json()['id']
-            print(f"✅ 投稿成功: {wp_title} (ID:{pid})")
+            print(f"   ✅ 投稿成功: {wp_title[:15]}... (ID:{pid})")
             
-            print("💬 コメント投入中...", end="")
+            print("   💬 コメント投入中...", end="")
             for comment in ai_data.get('comments', []):
                 c_data = {
                     'post': pid,
@@ -317,16 +331,16 @@ def post_to_wordpress(ai_data):
             print(" 完了")
             return True
         else:
-            print(f"❌ 投稿失敗: {res.text}")
+            print(f"   ❌ WP投稿失敗: {res.status_code}")
     except Exception as e:
-        print(f"❌ エラー: {e}")
+        print(f"   ❌ エラー: {e}")
     return False
 
 # ==========================================
 # メイン処理
 # ==========================================
 def main():
-    print("🤖 トレンド・ハンター v30 - 修正完了版 起動")
+    print("🤖 トレンド・ハンター v31 (スマートログ版) 起動")
     
     candidates = get_trends()
     random.shuffle(candidates)
@@ -336,7 +350,7 @@ def main():
         if count >= 3: break
         
         if check_exists(item['title']):
-            print(f"🔷 済: {item['title']}")
+            print(f"🔷 済: {item['title'][:20]}...")
             continue
             
         ai_data = generate_article_plan(item)
@@ -346,9 +360,10 @@ def main():
                 try: requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🆕 記事作成: {ai_data['title']}"})
                 except: pass
                 
-        time.sleep(5)
+        # 連続実行によるAPIエラーを防ぐため、1記事ごとに15秒休む
+        time.sleep(15)
 
-    print(f"🏁 完了: {count}件作成")
+    print(f"\n🏁 完了: {count}件作成")
 
 if __name__ == "__main__":
     main()
