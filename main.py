@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V94+】AI編集長・覚醒版 + 通知&演出強化
+【トレンド自動記事作成 V96】コミュニティ熱量最大化＆重複堅牢版
 修正点:
 1. 企画立案の高度化: 「キャラ＝好き嫌い」の固定ルールを撤廃。
 2. コンプラ・検閲の解除: Geminiのセーフティ設定を「BLOCK_NONE」に変更。
 3. ウソ防止安全策: Wikiにリスト情報がない場合は「好き嫌い（2択）」に自動着地。
 4. ジャンル認識強化: セキュリティソフト等との混同防止。
-5. 基本機能維持: 最下部コンテンツ、3記事作成。
-★追加: Discord通知、記号無視の重複チェック強化、投票数の格差演出（接戦/圧倒的等）
+5. 基本機能維持: 最下部コンテンツ、2記事作成。
+★追加1: Discord通知、投票数の格差演出（接戦/圧倒的等）
+★追加2: コメントの大幅強化 (10〜20件のランダム生成、機械的プレフィックス排除、掲示板風の会話演出)
+★追加3: 重複チェックの完全同期 (debate_hunter.pyと同等の「記号・空白無視のクリーンアップ比較」)
 """
 
 import os
@@ -81,7 +83,8 @@ def get_auth_header():
     return {'Authorization': f'Basic {token}'}
 
 def clean_title(text):
-    """★追加: 記号や空白を除去して純粋な文字列にする（重複チェック用）"""
+    """★追加: debate_hunter.pyと同じ、記号や空白を除去して純粋な文字列にする（重複チェック用）"""
+    if not text: return ""
     return re.sub(r'[^\w\s]', '', text).replace(' ', '').replace('　', '')
 
 def get_all_existing_titles():
@@ -398,22 +401,17 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     print(" -> 分析失敗")
     return {"core_keyword": pure_keyword, "article_type": "SKIP", "proposed_title": "", "reason": "", "suggested_category": "contents"}
 
-def get_comment_personas(count=10):
-    definitions = {
-        'normal': "普通。「〜だね」。",
-        'polite': "丁寧。「ですね」。",
-        'rough': "乱暴。「〜だろ」。",
-        'excited': "感情的。「〜すぎ！」。",
-        'slang': "ネット民。「草」。",
-        'otaku': "オタク。「尊い」。",
-        'simple': "一言。「これ。」。"
-    }
-    keys = list(definitions.keys())
-    selected_keys = random.choices(keys, k=count)
-    persona_prompt = "以下の10人のキャラになりきって、各1つ（計10個）コメントを書いて。\n"
-    for i, key in enumerate(selected_keys):
-        persona_prompt += f"{i+1}. {key}: {definitions[key]}\n"
-    return persona_prompt
+def get_natural_personas(count):
+    """★修正: コメントの件数を動的にし、掲示板風の自然な指示文に変更"""
+    return f"""
+    以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず {count} 個】生成してください。
+    
+    【★コメントの鉄則（絶対遵守）】
+    1. 「【選択肢名】」のような機械的な前置きは**絶対に書かない**こと。
+    2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。
+    3. 「やっぱこれだわ」「いや、普通に考えてそれはないだろ」「設定的にこっちが正解なんだよな」といった、感情的で生の声を意識すること。
+    4. 会話のライブ感を出すため、{count}件のうち2〜3件は「>>3 わかる」「それな」「異論は認める」のような、前のコメントへの反応（アンカーや同調）を含めること。
+    """
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
     theme = analysis_data['core_keyword']
@@ -422,7 +420,10 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     cat = analysis_data.get('suggested_category', 'contents')
 
     print(f"🤖 記事執筆中 ({theme})...", end="")
-    persona_instruction = get_comment_personas(10)
+    
+    # ★修正: コメント数を10〜20の間でランダムに決定
+    target_comment_count = random.randint(10, 20)
+    persona_instruction = get_natural_personas(target_comment_count)
     
     fact_instruction = ""
     if fact_check_data != "SEARCH_FAILED" and fact_check_data != "NO_SEARCH_MODULE":
@@ -462,7 +463,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     【★構成ルール】
     {type_instruction}
 
-    【コメント】
+    【コメント生成指示】
     {persona_instruction}
     
     【投票数】
@@ -484,7 +485,11 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
             {{ "name": "選択肢1(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 0 }}, 
             {{ "name": "選択肢2(短く固有名詞)", "text": "濃厚な解説(200文字以上)", "votes": 0 }}
         ],
-        "comments": [ {{ "name": "匿名", "text": "コメント" }} ]
+        "comments": [ 
+            {{ "name": "匿名", "text": "やっぱこれ一択だろ" }},
+            {{ "name": "名無し", "text": ">>1 いや、普通に考えてこっちだわ" }}
+            // ... 指定された {target_comment_count} 件生成すること
+        ]
     }}
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
@@ -497,7 +502,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         text = text.replace('```json', '').replace('```', '').strip()
         start = text.find('{'); end = text.rfind('}') + 1
         data_json = json.loads(text[start:end])
-        print(" -> 完了")
+        print(f" -> 完了 (コメント{len(data_json.get('comments', []))}件生成)")
         return data_json
     except:
         print(" -> 生成エラー")
@@ -521,7 +526,7 @@ def post_comment(pid, name, text, date_str):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V94+: 覚醒版+演出・通知) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V96: 覚醒版+演出・通知・自然コメント) 開始...")
 
 success_count = 0
 processed_core_keywords = set() 
@@ -585,7 +590,7 @@ else:
              data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
              if not data: continue
 
-        # ★変更: 重複チェックの強化（生成されたタイトルをクリーンにして比較）
+        # ★修正: クリーンアップされたタイトル同士で重複チェック
         if clean_title(data['title']) in existing_titles:
             print(f" -> 🚫 タイトル重複（類似検知）のためSKIP: {data['title']}")
             continue
@@ -627,7 +632,7 @@ else:
             else: # 中程度
                 votes = random.randint(350, 500) if i == 0 else random.randint(100, 200)
 
-            # 端数を少し散らす（V94の元のロジックも残す）
+            # 端数を少し散らす
             if votes % 10 == 0: votes += random.randint(1, 9)
             
             meta[f'vote_multi_idx_{i}'] = str(votes)
@@ -669,19 +674,19 @@ else:
                 post_link = res_data.get('link')
                 print(f"✅ 投稿完了 (ID:{pid})")
                 
-                print("💬 コメント投稿中...", end="")
+                print(f"💬 コメント投稿中({len(data.get('comments', []))}件)...", end="")
                 for com in data.get('comments', []):
                     c_time = post_time + timedelta(minutes=random.randint(5, 55))
                     if c_time > now: c_time = now
                     post_comment(pid, com['name'], com['text'], c_time.strftime('%Y-%m-%dT%H:%M:%S'))
-                    time.sleep(0.2)
+                    time.sleep(0.3) # コメント件数が増えたため、連続POSTエラー防止で少し待機
                 print(" 完了")
                 
                 # ★追加: 記事・コメント投稿がすべて終わったらDiscordに通知
                 send_discord_notification(pid, data['title'], post_link)
                 
                 success_count += 1
-                # 今回の実行内で同じタイトルが生成されないようにリストへ追加
+                # 今回の実行内で同じタイトルが生成されないようにクリーンなタイトルをリストへ追加
                 existing_titles.append(clean_title(data['title']))
         except Exception as e: 
             print(f"❌ 投稿エラー: {e}")
