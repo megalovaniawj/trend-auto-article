@@ -13,8 +13,8 @@ import base64
 # ==========================================
 # ★ 1. 設定エリア
 # ==========================================
-WP_URL = os.environ.get("WP_URL")
-WP_USER = os.environ.get("WP_USER")
+WP_URL = "https://docchiyo.com"
+WP_USER = "bear"
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
