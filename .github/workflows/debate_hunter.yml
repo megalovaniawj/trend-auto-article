@@ -1,35 +1,40 @@
-name: Debate Hunter
+name: Docchiyo AI Auto Post v71
 
+# 実行タイミングの設定
 on:
   schedule:
-    - cron: '0 21 * * *' # 日本時間 朝6時
-    - cron: '0 9 * * *'  # 日本時間 夕18時
-  workflow_dispatch:
+    # 日本時間の 朝6時, 昼12時, 夕方18時, 夜22時 に実行
+    # (※GitHubはUTC時間のため、日本時間からマイナス9時間して指定しています)
+    - cron: '0 21,3,9,13 * * *'
+  # 手動で「Run workflow」ボタンを押せるようにするおまじない
+  workflow_dispatch: 
 
 jobs:
-  build:
+  auto-post:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.10'
 
     - name: Install dependencies
+      # v71で必要なライブラリを全てインストール
       run: |
         python -m pip install --upgrade pip
-        # duckduckgo-searchなどを追加
-        pip install feedparser requests duckduckgo-search
+        pip install requests feedparser google-generativeai pytz
 
-    - name: Run Debate Script
+    - name: Run AI Editor Script
+      # GitHubのSecretsに登録した鍵をPythonに渡す
       env:
-        # ★ここでSecretsをPythonに渡します（これが抜けているとエラーになります）
-        WP_URL: ${{ secrets.WP_URL }} # もし設定していれば
-        WP_USER: ${{ secrets.WP_USER }} # もし設定していれば
+        WP_URL: ${{ secrets.WP_URL }}
+        WP_USER: ${{ secrets.WP_USER }}
         WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} 
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      # 実行するPythonファイル名（もしファイル名が違う場合は書き換えてください）
       run: python debate_hunter.py
