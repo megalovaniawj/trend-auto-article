@@ -212,11 +212,24 @@ def generate_article_content(news_item, editor_data):
     cands = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
     personas = get_comment_personas(6) # 6件のコメントを生成
     
+# ▼▼▼▼▼ 修正箇所：タイトル生成プロンプトの抜本的改善 ▼▼▼▼▼
     prompt = f"""
-    以下のニュースと選択肢を元に、読者を煽り投票したくなる論説記事を作成してください。
+    あなたは議論サイト「どっちよ.com」の敏腕編集長です。
+    以下のニュースと選択肢を元に、読者を煽り、思わず投票やコメントをしたくなる論説記事を作成してください。
 
     【ニュース】 {title}
     【選択肢】 {cands}
+
+    【タイトル（post_title）作成の厳格なルール】
+    ニュースの内容を分析し、以下のいずれかのアプローチで、30文字以内のタイトルを作成してください。
+    絶対に「〜の全貌」「〜について」のような平坦なタイトルや、「〜の発言は？」のような中途半端な疑問形は避けてください。
+    
+    アプローチA（二項対立型）: ニュースに明確な対立軸（賛成/反対、正論/暴論など）がある場合。
+    タイトルの末尾に心の中で「（どっち？）」と付け足した際、日本語として違和感なく成立する疑問形にすること。
+    例：「【激論】Netflix幹部のWBC批判、正論？それとも暴論？」
+    
+    アプローチB（オープンクエスチョン型）: 明確な二項対立はないが、多様な意見が予想される場合。読者に意見を求める形にすること。
+    例：「【祝50周年】Apple歴代製品で、あなたが一番革新的だと思うのはどれ？」
 
     【サクラコメントのペルソナ指定】
     以下のキャラクターになりきって、各選択肢に対する熱いコメントを合計6つ生成してください。
@@ -224,7 +237,7 @@ def generate_article_content(news_item, editor_data):
 
     【出力形式(JSON) ※slugは英語小文字とハイフンのみ】
     {{
-      "post_title": "【〇〇】〇〇は？ (※WP用タイトル。30文字以内)",
+      "post_title": "作成した30文字以内の煽りタイトル",
       "slug": "short-english-slug",
       "category_slug": "contents",
       "h2_title": "議論の核心を突く煽り見出し",
@@ -239,6 +252,7 @@ def generate_article_content(news_item, editor_data):
       ]
     }}
     """
+# ▲▲▲▲▲ 修正箇所ここまで ▲▲▲▲▲
     return call_gemini_api(prompt)
 
 # ==========================================
@@ -273,38 +287,51 @@ def post_to_wordpress(article_data):
         post_link = res_data.get("link")
         print(f"✅ 記事投稿成功! (ID: {post_id})")
         
+# ▼▼▼▼▼ 修正箇所：カスタムフィールド保存処理のバグ修正 ▼▼▼▼▼
         # カスタムフィールド保存
-        meta_payload = {
-            "meta": {
-                "post_views_count": "0",
-                "wiki_h2_title": article_data.get("h2_title", ""),
-                "wiki_h2_text": article_data.get("intro", ""),
-                "wiki_fact_h3": article_data.get("trivia_title", ""),
-                "wiki_info_fact": article_data.get("trivia_text", "")
+        try:
+            meta_payload = {
+                "meta": {
+                    "post_views_count": "0",
+                    "wiki_h2_title": article_data.get("h2_title", ""),
+                    "wiki_h2_text": article_data.get("intro", ""),
+                    "wiki_fact_h3": article_data.get("trivia_title", ""),
+                    "wiki_info_fact": article_data.get("trivia_text", "")
+                }
             }
-        }
-        for i, item in enumerate(article_data.get("items", [])[:10]):
-            idx = i + 1
-            meta_payload["meta"][f"wiki_item_name_{idx}"] = item["name"]
-            meta_payload["meta"][f"wiki_item_img_{idx}"] = ""
-            meta_payload["meta"][f"wiki_info{idx}_h3"] = f"{item['name']}の意見"
-            meta_payload["meta"][f"wiki_info_{idx}"] = item["desc"]
-            # 投票数
-            votes = item.get('votes', random.randint(10, 200))
-            meta_payload["meta"][f'vote_multi_idx_{i}'] = str(votes)
-            if len(article_data.get("items", [])) == 2:
-                k = 'vote_count_a' if i == 0 else 'vote_count_b'
-                meta_payload["meta"][k] = str(votes)
+            
+            for i, item in enumerate(article_data.get("items", [])[:10]):
+                idx = i + 1
+                meta_payload["meta"][f"wiki_item_name_{idx}"] = item["name"]
+                meta_payload["meta"][f"wiki_item_img_{idx}"] = ""
+                meta_payload["meta"][f"wiki_info{idx}_h3"] = f"{item['name']}の意見"
+                meta_payload["meta"][f"wiki_info_{idx}"] = item["desc"]
+                # 投票数
+                votes = item.get('votes', random.randint(10, 200))
+                meta_payload["meta"][f'vote_multi_idx_{i}'] = str(votes)
+                # ★修正: k の定義と代入を整理
+                if len(article_data.get("items", [])) == 2:
+                    k = 'vote_count_a' if i == 0 else 'vote_count_b'
+                    meta_payload["meta"][k] = str(votes)
 
-        requests.post(f"{wp_api_url}/{post_id}", headers=auth_header, json=meta_payload)
+            # ループを抜けてから、1回だけカスタムフィールド更新のPOSTリクエストを送る
+            requests.post(f"{wp_api_url}/{post_id}", headers=auth_header, json=meta_payload, timeout=15)
+            
+        except Exception as e:
+             print(f"⚠️ カスタムフィールド保存エラー: {e}")
+# ▲▲▲▲▲ 修正箇所ここまで ▲▲▲▲▲
         
         # 初期コメント投稿
         print("💬 コメント投稿中...", end="")
         for com in article_data.get('comments', []):
             c_time = post_time + timedelta(minutes=random.randint(1, 9))
-            requests.post(f"{WP_URL}/wp-json/wp/v2/comments", headers=auth_header, 
-                          json={'post': post_id, 'author_name': com['name'], 'content': com['text'], 'status': 'approve', 'date': c_time.strftime('%Y-%m-%dT%H:%M:%S')})
-            time.sleep(0.5) # コメント連続投稿時のエラー防止
+            try:
+                requests.post(f"{WP_URL}/wp-json/wp/v2/comments", headers=auth_header, 
+                              json={'post': post_id, 'author_name': com['name'], 'content': com['text'], 'status': 'approve', 'date': c_time.strftime('%Y-%m-%dT%H:%M:%S')}, timeout=10)
+                time.sleep(0.5) # コメント連続投稿時のエラー防止
+            except Exception as e:
+                print(f"\n⚠️ コメント投稿エラー({com['name']}): {e}")
+                continue # エラーが起きても次のコメント投稿へ進む
         print(" 完了")
             
         return {"link": post_link, "id": post_id, "title": article_data.get('post_title')}
@@ -316,7 +343,7 @@ def post_to_wordpress(article_data):
 # ★ メイン処理
 # ==========================================
 if __name__ == "__main__":
-    print("=== どっちよ.com AI自動投稿システム V73 スタート ===")
+    print("=== どっちよ.com AI自動投稿システム V74 スタート ===")
     
     existing_titles = get_all_existing_titles()
     
@@ -349,6 +376,8 @@ if __name__ == "__main__":
                     continue
                     
                 post_result = post_to_wordpress(article)
+                
+                # ▼▼▼▼▼ 修正箇所：Discord通知の実行確認とエラーハンドリング強化 ▼▼▼▼▼
                 if post_result:
                     posted_count += 1
                     post_link = post_result["link"]
@@ -360,9 +389,15 @@ if __name__ == "__main__":
                             "content": f"🎉 **新しい論争記事が投稿されました！**\n\n**【タイトル】**\n{post_result['title']}\n\n**【公開URL】**\n{post_link}\n\n**【編集画面】**\n{edit_url}"
                         }
                         try:
-                            requests.post(DISCORD_WEBHOOK_URL, json=discord_data)
+                            # timeoutを設定し、エラー原因を表示させる
+                            discord_res = requests.post(DISCORD_WEBHOOK_URL, json=discord_data, timeout=10)
+                            discord_res.raise_for_status() # 200番台以外のステータスコードで例外を発生させる
                             print("🔔 Discordに通知を送信しました")
-                        except: pass
+                        except requests.exceptions.RequestException as e:
+                            print(f"⚠️ Discord通知エラー: {e}")
+                    else:
+                         print("⚠️ DISCORD_WEBHOOK_URLが設定されていないため、通知をスキップしました。")
+                # ▲▲▲▲▲ 修正箇所ここまで ▲▲▲▲▲
         else:
             print(f"🗑️ ボツ。次のニュースを探します...\n")
 
