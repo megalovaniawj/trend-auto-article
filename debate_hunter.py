@@ -1,459 +1,350 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
-import requests
-import base64
-import time
-import random
 import json
+import time
+import requests
 import feedparser
-import re
-import html
 from datetime import datetime, timedelta
+import pytz
+import re
+import google.generativeai as genai
 
 # ==========================================
-# ★設定エリア
+# ★ 1. 設定エリア
 # ==========================================
-WP_URL_DEFAULT = "https://docchiyo.com"
-WP_USER_DEFAULT = "bear"
-
-WP_URL = os.environ.get("WP_URL")
-if not WP_URL: WP_URL = WP_URL_DEFAULT
-
+# WordPress設定
+WP_URL = os.environ.get("WP_URL")  # 例: "https://docchiyo.com"
 WP_USER = os.environ.get("WP_USER")
-if not WP_USER: WP_USER = WP_USER_DEFAULT
-
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if not WP_APP_PASS or not GEMINI_API_KEY:
-    print("❌ エラー: 環境変数 (WP_APP_PASS, GEMINI_API_KEY) が読み込めません。")
+# Gemini API設定
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    # 安定して高速・安価な2.5-flashを推奨
+    model = genai.GenerativeModel('gemini-2.5-flash')
+else:
+    print("⚠️ エラー: GEMINI_API_KEY が設定されていません。")
     sys.exit(1)
 
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
+# Discord設定
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# ★モデル設定
-MODEL_NAME = "gemma-3-27b-it" 
+# メガトレンド（例外的に拾う特大キーワード）
+MEGA_TRENDS = ["WBC", "ワールドカップ", "五輪", "オリンピック", "M-1", "大谷翔平"]
 
-CATEGORY_IDS = {
-    "social": 194, "food": 11, "tech": 24,
-    "anime": 155, "entame": 95, "game": 13
-}
-
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
-
-SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+# 情報源（エンタメ特化 + Google Trends エンタメ）
+RSS_FEEDS = [
+    "https://news.yahoo.co.jp/rss/topics/it.xml",
+    "https://news.yahoo.co.jp/rss/topics/entertainment.xml",
+    "https://www.4gamer.net/rss/index.xml",
+    "https://automaton-media.com/feed/",
+    "https://dengekionline.com/feed/",
+    "https://animeanime.jp/feed/"
 ]
 
-# ★RSSリスト
-RSS_URLS = [
-    "https://news.yahoo.co.jp/rss/topics/dom.xml",   # 社会
-    "https://news.yahoo.co.jp/rss/topics/it.xml",    # IT
-    "https://news.yahoo.co.jp/rss/topics/ent.xml",   # エンタメ
-    "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml", # IT/ビジネス
-    "https://entabe.jp/news.rss",                    # グルメ
-    "https://rocketnews24.com/feed/",                # 雑多・グルメ
-    "https://www.businessinsider.jp/feed/index.xml", # ビジネス・社会
-    "https://www.4gamer.net/rss/index.xml"           # ゲーム
-]
-
-NG_WORDS = ["セール", "決算", "インタビュー", "レポート", "舞台", "オーディション", "求人", "人事", "放送", "プレゼント", "まとめ", "訃報", "死去", "ご冥福", "亡く", "逝去"]
-TARGET_WORDS = ["発売", "リリース", "決定", "発表", "開始", "新商品", "新メニュー", "公開", "実写化", "映画化", "アニメ化", "検討", "方針", "批判", "物議", "炎上", "逮捕", "容疑", "可決", "辞任", "疑惑", "増税", "義務化", "中止", "話題"]
-
 # ==========================================
-# 関数定義
+# ★ 2. ニュース収集＆鮮度フィルター機能
 # ==========================================
+def get_mega_trends_and_entertainment_news():
+    """RSSとトレンドからニュースを取得し、鮮度ごとにTier分けする"""
+    print("📡 ニュースの収集を開始します...")
+    now_utc = datetime.utcnow()
+    news_list = []
 
-def get_auth_header():
-    creds = f"{WP_USER.strip()}:{WP_APP_PASS.strip()}"
-    token = base64.b64encode(creds.encode()).decode()
-    # 415エラー対策: Content-Type と User-Agent を追加してWAFを回避
-    return {
-        'Authorization': f'Basic {token}',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-
-def clean_text(text):
-    if not text: return ""
-    text = re.sub(r'<[^>]+>', '', text)
-    text = html.unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-# 重複チェック機能
-def check_exists(title):
-    headers = get_auth_header()
-    if not headers: return False
-    
-    clean_title = clean_text(title)
-    keywords = re.findall(r'[a-zA-Z0-9]+|[ァ-ンー]{3,}', clean_title)
-    if keywords:
-        search_query = max(keywords, key=len)
-    else:
-        search_query = clean_title[:15]
-
-    endpoint = f"{WP_URL}/wp-json/wp/v2/posts?search={search_query}&status=any&per_page=5"
-    
-    print(f"   🔍 重複チェック: '{search_query}' で検索...", end="")
-    
-    try:
-        res = requests.get(endpoint, headers=headers, timeout=10)
-        if res.status_code == 200:
-            posts = res.json()
-            if posts:
-                for post in posts:
-                    try:
-                        post_date = datetime.fromisoformat(post['date'])
-                        diff = datetime.now() - post_date
-                        if diff.days < 30: 
-                            print(f" -> 🛑 あり ({diff.days}日前): {post['title']['rendered'][:10]}...")
-                            return True
-                    except: pass
-                
-                print(f" -> 🟢 古いのでOK")
-                return False
-            else:
-                print(" -> 🟢 なし")
-                return False
-    except Exception as e:
-        print(f" -> ⚠️ エラー: {e}")
-        pass
-    return False
-
-# --- 1. トレンド収集 ---
-
-def get_trends():
-    print("📈 トレンド収集中...", end="")
-    items = []
-    
-    # Google Trends
-    try:
-        url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=all&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code == 200:
-            data = json.loads(res.text.replace(")]}',", "").strip())
-            stories = data.get('storySummaries', {}).get('trendingStories', [])
-            for story in stories[:10]:
-                title = story.get('title')
-                articles = story.get('articles', [])
-                desc = articles[0].get('snippet', '') if articles else ""
-                link = articles[0].get('url', '') if articles else ""
-                if title:
-                    items.append({"title": title, "desc": desc, "link": link})
-    except: pass
-
-    # RSS (ランダム順)
-    shuffled_rss = RSS_URLS.copy()
-    random.shuffle(shuffled_rss) 
-
-    for url in shuffled_rss:
+    # 1. RSSの取得
+    for url in RSS_FEEDS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:5]: 
-                title = clean_text(entry.title)
-                if any(w in title for w in TARGET_WORDS) and not any(w in title for w in NG_WORDS):
-                    items.append({"title": title, "desc": clean_text(entry.description), "link": entry.link})
-        except: pass
-        
-    print(f" OK ({len(items)}件)")
-    return items
+            for entry in feed.entries[:10]: # 各サイト上位10件をチェック
+                # 発行日時の解析
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+                else:
+                    pub_time = now_utc # 時間不明は最新扱い
 
-# --- 2. 情報調査 ---
+                hours_ago = (now_utc - pub_time).total_seconds() / 3600
+                
+                news_list.append({
+                    "title": entry.title,
+                    "link": entry.link,
+                    "hours_ago": hours_ago,
+                    "source": feed.feed.title if hasattr(feed.feed, 'title') else "RSS"
+                })
+        except Exception as e:
+            print(f"⚠️ RSS取得エラー ({url}): {e}")
 
-def fetch_web_info(url):
+    # 2. Google Trends (cat=e エンタメ特化) の取得
     try:
-        r = requests.get(url, headers=HEADERS, timeout=5)
-        if r.status_code == 200:
-            match = re.search(r'<meta (property|name)="og:description" content="(.*?)"', r.text)
-            if match: return clean_text(match.group(2))
-    except: pass
-    return ""
+        gt_url = "https://trends.google.co.jp/trends/api/realtimetrends?hl=ja&tz=-540&cat=e&fi=0&fs=0&geo=JP&ri=300&rs=20&sort=0"
+        gt_res = requests.get(gt_url, timeout=10)
+        if gt_res.status_code == 200:
+            gt_text = gt_res.text
+            # 先頭の不要な文字列を取り除く
+            if gt_text.startswith(")]}',"):
+                gt_text = gt_text[5:]
+            gt_data = json.loads(gt_text)
+            
+            for story in gt_data.get('storySummaries', {}).get('trendingStories', [])[:5]:
+                title = story.get('title', '')
+                articles = story.get('articles', [])
+                link = articles[0].get('url') if articles else ""
+                
+                if title and link:
+                    news_list.append({
+                        "title": title,
+                        "link": link,
+                        "hours_ago": 1, # トレンドは超新鮮(1時間)として扱う
+                        "source": "Google Trends"
+                    })
+    except Exception as e:
+        print(f"⚠️ Google Trends取得エラー: {e}")
 
-def get_wikipedia_data(keyword):
-    try:
-        # キーワード抽出の強化（タイトルから漢字2文字以上、カタカナ英数字3文字以上を抜き出す）
-        kw_match = re.findall(r'[a-zA-Z0-9]{3,}|[ァ-ンー]{3,}|[一-龠]{2,}', keyword)
-        search_kw = max(kw_match, key=len) if kw_match else keyword[:15]
+    # 3. カスケード（多段）鮮度フィルターによる振り分け
+    tier1 = [] # 12時間以内
+    tier2 = [] # 24時間以内
+    tier3 = [] # 48時間以内
+    
+    for news in news_list:
+        title_text = news['title']
+        h_ago = news['hours_ago']
         
-        clean_kw = re.sub(r'【.*?】', '', search_kw).strip()
-        url = "https://ja.wikipedia.org/w/api.php"
-        params = { "action": "query", "format": "json", "prop": "extracts", "exintro": True, "explaintext": True, "redirects": 1, "titles": clean_kw }
-        r = requests.get(url, params=params, timeout=5)
-        data = r.json()
-        pages = data.get("query", {}).get("pages", {})
-        for pid, page in pages.items():
-            if pid == "-1": continue
-            return page.get("extract", "")[:800]
-    except: pass
-    return None
+        # メガトレンドキーワードが含まれていれば無条件でTier1
+        is_mega = any(mega in title_text for mega in MEGA_TRENDS)
+        
+        if is_mega or h_ago <= 12:
+            tier1.append(news)
+        elif h_ago <= 24:
+            tier2.append(news)
+        elif h_ago <= 48:
+            tier3.append(news)
+        # 48時間より古いものは捨てる
+        
+    print(f"✅ 取得完了: [超新鮮] {len(tier1)}件, [新鮮] {len(tier2)}件, [妥協] {len(tier3)}件")
+    return tier1, tier2, tier3
 
-# --- 3. AI編集長による企画・記事作成 (論点整理モード) ---
-
-def generate_article_plan(item):
-    print(f"   🧠 AI編集長が企画中 (論点整理モード): {item['title'][:20]}...")
+# ==========================================
+# ★ 3. AI編集長（ボツ判定＆記事型選択）
+# ==========================================
+def ask_ai_editor(news_item):
+    """ニュースを評価し、70点以上なら型と選択肢を返す"""
+    print(f"🤖 AI編集長が査定中: {news_item['title']}")
     
-    web_desc = fetch_web_info(item['link'])
-    wiki_data = get_wikipedia_data(item['title'])
-    
-    context_text = f"ニュース: {item['title']}\n概要: {item['desc']}\n詳細: {web_desc}\nWiki: {wiki_data}"
-
-    persona_prompt = """
-    【コメント生成指示】
-    この記事に対する「読者のリアルな書き込み」を5件生成し、JSONの `comments` 配列に格納せよ。
-    以下の5人のキャラクターになりきり、口調やテンションを完全に演じ分けること。名前は不要（システム側で処理するため）。
-
-    1. **熱狂的な賛成派**: 「うおおお！神！」「絶対買う」「これは英断」 (短文、勢い重視)
-    2. **冷笑的な反対派**: 「はいはい解散」「今更感w」「改悪でしかない」 (スラング、批判的)
-    3. **慎重な分析家**: 「スペック的には...」「コスパ次第かな」「論点はそこじゃない」 (冷静、長文可)
-    4. **無知な初心者**: 「これ何？」「どういうこと？」「誰か教えて」 (質問、弱気)
-    5. **通りすがりの一般人**: 「話題だね」「へー」「みんな熱いな」 (無関心、相槌)
-    """
-
     prompt = f"""
-    あなたは投票サイト「どっちよ.com」の凄腕編集長です。
-    トレンドニュースを元に、読者が「思わず議論に参加したくなる」究極の投票記事を作成してください。
+    あなたはエンタメ・ゲーム特化の論争メディアの敏腕編集長です。
+    以下のニュースが、読者が熱狂して投票やコメントをしたくなる「炎上・賛否両論・熱い議論」のテーマになるか、100点満点で採点してください。
 
-    【入力情報】
-    {context_text}
+    【ニュースタイトル】
+    {news_item['title']}
 
-    【★企画ルール：厳守】
-    
-    1. **タイトル (title)**: 
-       - 「対立構造（AかBか、賛成か反対か）」が明確に伝わるキャッチーなタイトル ＋ 「アリ？ナシ？」「どっち？」等の短い問いかけ。
+    【採点基準（必ず守ること）】
+    1. 感情の衝突 (40点): 「怒り」「悲しみ」「熱狂」がぶつかり合うか。単なる事実の報告は0点。
+    2. 選択肢の構造 (40点): 読者が選べる明確な選択肢が作れるか。
+    3. ターゲット層 (20点): ゲーマー・オタク層・ネット民が好む話題か。
 
-    2. **記事本文 (h2_text)**:
-       - **この記事の最大の価値は「論点の整理」です。単なるニュース解説ではなく、「なぜ今ネットで議論・賛否が巻き起こっているのか」を徹底的に整理して記述してください。**
-       - ニュースの基本情報（背景・スペック等）を簡潔に書いた後、必ず【賛成派（肯定派）の主張】と【反対派（否定派）の主張】を分かりやすく対比させて、**600〜800文字**で詳しく解説してください。
-       - 読者がこの本文を読むだけで「なるほど、そういう論争があるのか。自分はこっち派だな」と判断できるようにすること。
+    【出力形式のルール】
+    以下のJSONフォーマットのみを絶対に出力してください。（Markdown記法や```jsonなどは一切含めないこと）
 
-    3. **選択肢 (items)**: 
-       - `name`: 選択肢の名前のみ。2つ〜4つの選択肢。
-       - 単純な「賛成/反対」や「買う/買わない」などの明確な対立構造にすること。
-       - **解説文 (text) は不要です。絶対に作成しないでください。**
-
-    4. **豆知識 (fact_text)**:
-       - Wiki資料がある場合はそれを活用し、ない場合でもあなたの知識を活用して、ニュースに関連する情報を**200文字前後**で詳しく書いてください。
-       - **もしどうしても書くことがない場合のみ、空文字 "" にしてください。その場合、見出し(fact_h3)も空文字にしてください。**
-
-    5. **コメント (comments)**:
-       - 上記の「コメント生成指示」に従い、5つの異なる視点のコメントを生成してください。
-
-    【出力形式(JSONのみ)】
     {{
-      "category": "social/food/tech/anime/entame/game のいずれか",
-      "title": "対立構造がわかるニュース事実＋問いかけ",
-      "h2_title": "議論を促す導入見出し",
-      "h2_text": "ニュース詳細と【賛成派・反対派の論点整理】を含む充実した本文(600文字以上)",
-      "fact_h3": "内容に即した具体的な見出し(空にする場合はここも空文字)",
-      "fact_text": "ニュースの背景や雑学(200文字前後。書けない場合は空文字)",
-      "items": [
-        {{ "name": "選択肢1" }}, 
-        {{ "name": "選択肢2" }},
-        {{ "name": "選択肢3(必要なら)" }}
-      ],
-      "comments": [
-          {{ "name": "匿名", "content": "コメント本文1" }},
-          {{ "name": "匿名", "content": "コメント本文2" }},
-          {{ "name": "匿名", "content": "コメント本文3" }},
-          {{ "name": "匿名", "content": "コメント本文4" }},
-          {{ "name": "匿名", "content": "コメント本文5" }}
+      "score": 点数(数値),
+      "reason": "採点の理由（100文字程度）",
+      "vote_type": "binary_plus", // 二項対立＋中立(様子見)が適している場合は "binary_plus", 単純な人気投票が適している場合は "multiple"
+      "candidates": [
+        "選択肢1（熱量高め）",
+        "選択肢2（熱量高め）",
+        "選択肢3（中立・様子見・その他）" // vote_typeがbinary_plusの場合は必ず3つ、multipleの場合は5〜10個
       ]
     }}
-    {persona_prompt}
     """
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
     
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            res = requests.post(url, headers=headers, json=data, timeout=60)
-            if res.status_code == 200:
-                text = res.json()['candidates'][0]['content']['parts'][0]['text']
-                text = text.replace('```json', '').replace('```', '').strip()
-                start = text.find('{')
-                end = text.rfind('}') + 1
-                return json.loads(text[start:end])
-            elif res.status_code == 429:
-                if attempt < max_retries - 1:
-                    print(f"   ⚠️ API制限。20秒待機...")
-                    time.sleep(20) 
-                else:
-                    return None
-            else:
-                return None
-        except Exception as e:
-            print(f"   ❌ 通信エラー: {e}")
-            return None
-    return None
-
-# --- 4. コメント投稿関数 ---
-def post_comment_to_wp(pid, name, content):
-    url = f"{WP_URL}/wp-json/wp/v2/comments"
-    headers = get_auth_header()
-    c_dt = datetime.now() - timedelta(minutes=random.randint(5, 120))
-    data = {
-        'post': pid,
-        'author_name': name,
-        'content': content,
-        'status': 'approve', 
-        'date': c_dt.isoformat()
-    }
     try:
-        res = requests.post(url, headers=headers, json=data, timeout=10)
-        if res.status_code == 201:
-            return True, ""
-        else:
-            return False, f"{res.status_code} {res.text}"
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(response_mime_type="application/json")
+        )
+        result = json.loads(response.text)
+        print(f"   👉 判定: {result.get('score', 0)}点 ({result.get('vote_type')})")
+        print(f"   👉 理由: {result.get('reason')}")
+        return result
     except Exception as e:
-        return False, str(e)
-
-# --- 5. WordPress投稿 ---
-
-def post_to_wordpress(ai_data):
-    if not ai_data: return False
-    
-    cat_slug = ai_data.get('category', 'social')
-    cat_id = CATEGORY_IDS.get(cat_slug, 194)
-    
-    wp_title = ai_data.get('title')
-    items = ai_data.get('items', [])
-    
-    if len(items) < 2: return False
-
-    items_str = ",".join([f"{item['name']}|" for item in items])
-    
-    content = f"""
-[vote_bar items="{items_str}"]
-[vote_summary items="{items_str}"]
-"""
-
-    # ★修正箇所: 本文(fact_text)が空なら、見出し(fact_h3)も空にして枠を非表示にする
-    f_text = ai_data.get('fact_text', '').strip()
-    f_h3 = ai_data.get('fact_h3', '関連情報')
-    if not f_text:
-        f_h3 = ""
-
-    meta = {
-        'wiki_h2_title': ai_data.get('h2_title', 'ニュースの背景'),
-        'wiki_h2_text': ai_data.get('h2_text', ''),
-        'wiki_fact_h3': f_h3,
-        'wiki_info_fact': f_text,
-        'post_views_count': '0'
-    }
-
-    initial_votes = [0] * 10
-    total_sakura = random.randint(40, 60)
-    
-    for i, item in enumerate(items):
-        idx = i + 1
-        meta[f'wiki_item_name_{idx}'] = item['name']
-        meta[f'wiki_item_img_{idx}'] = ""
-        meta[f'wiki_info{idx}_h3'] = "" 
-        meta[f'wiki_info_{idx}'] = "" 
-        
-    weights = [50, 30, 10, 5, 5] + [1] * 5
-    for _ in range(total_sakura):
-        valid_weights = weights[:len(items)]
-        chosen_idx = random.choices(range(len(items)), weights=valid_weights)[0]
-        initial_votes[chosen_idx] += 1
-
-    for i in range(len(items)):
-        meta[f'vote_multi_idx_{i}'] = str(initial_votes[i])
-        if len(items) == 2:
-            k = 'vote_count_a' if i == 0 else 'vote_count_b'
-            meta[k] = str(initial_votes[i])
-
-    post_data = {
-        'title': wp_title,
-        'content': content,
-        'status': 'publish', 
-        'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
-        'categories': [cat_id],
-        'meta': meta
-    }
-
-    try:
-        res = requests.post(f"{WP_URL}/wp-json/wp/v2/posts", headers=get_auth_header(), json=post_data, timeout=30)
-        if res.status_code == 201:
-            pid = res.json()['id']
-            print(f"   ✅ 投稿成功 (公開): {wp_title[:20]}... (ID:{pid})")
-            
-            print("   💬 コメント投稿中...", end="")
-            
-            comments_list = ai_data.get('comments', [])
-            if not comments_list:
-                comments_list = [
-                    {"name": "匿名", "content": "これは気になる！"},
-                    {"name": "匿名", "content": "様子見かなあ。"},
-                    {"name": "匿名", "content": "期待してる！"},
-                    {"name": "匿名", "content": "どっちも捨てがたい..."},
-                    {"name": "匿名", "content": "盛り上がってきたね"}
-                ]
-
-            success_c = 0
-            for c in comments_list:
-                if isinstance(c, str):
-                    c_content = c
-                else:
-                    c_content = c.get('content', c.get('text', ''))
-                
-                # ★修正: 名前を強制的に「匿名」にする
-                c_name = "匿名" 
-                
-                if c_content:
-                    success, msg = post_comment_to_wp(pid, c_name, c_content)
-                    if success:
-                        success_c += 1
-                        print(f" [OK]", end="")
-                    else:
-                        print(f" [NG:{msg}]", end="")
-                    time.sleep(1) 
-            
-            print(f" -> 完了 ({success_c}件)")
-            return True
-        else:
-            print(f"   ❌ WP投稿失敗: {res.status_code} {res.text}")
-    except Exception as e:
-        print(f"   ❌ エラー: {e}")
-    return False
+        print(f"   ❌ AI編集長エラー: {e}")
+        return {"score": 0}
 
 # ==========================================
-# メイン処理
+# ★ 4. 記事本文のAI執筆（1500文字高密度）
 # ==========================================
-def main():
-    print(f"🤖 トレンド・ハンター v67 (Model: {MODEL_NAME} / 論点整理モード) 起動")
+def generate_article_content(news_item, editor_data):
+    """合格したネタから、WordPressに投稿する完全な記事データを作る"""
+    print(f"✍️ AIライターが記事を執筆中...")
     
-    candidates = get_trends()
-    random.shuffle(candidates)
+    title = news_item['title']
+    vote_type = editor_data.get('vote_type', 'binary_plus')
+    candidates_json = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
     
-    count = 0
-    for item in candidates:
-        # ★記事作成数: ここで調整 (現在は1件でストップするようになっています)
-        if count >= 1: break
+    prompt = f"""
+    以下のニュースと選択肢を元に、読者を煽り、投票したくなるような熱い論説記事を作成してください。
+    文字数は無駄に長くせず、非常に高密度で具体的な内容にしてください。（合計約1500文字想定）
+
+    【テーマとなるニュース】
+    {title}
+    
+    【設定された選択肢】
+    {candidates_json}
+
+    【出力形式のルール】
+    以下のJSONフォーマットのみを絶対に出力してください。（Markdown記法は禁止）
+
+    {{
+      "post_title": "【〇〇】〇〇は？ (※WordPressのタイトル用。20〜30文字程度)",
+      "h2_title": "記事のH2見出し (※議論の核心を突く煽り文句)",
+      "intro": "読者を惹きつける導入文。なぜ今これが燃えているのか。(約300文字)",
+      "items": [
+        {{
+          "name": "選択肢1の名前",
+          "desc": "この選択肢を選ぶ人の気持ちの代弁、具体的な主張。(約200〜300文字)"
+        }},
+        // ...設定された選択肢の数だけ繰り返す
+      ],
+      "trivia_title": "専門性を高める豆知識の見出し (例: 過去の似たような炎上事件)",
+      "trivia_text": "検索エンジン(SEO)に評価されるような、背景知識や事実関係の解説。(約400文字)"
+    }}
+    """
+    
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(response_mime_type="application/json")
+        )
+        article_data = json.loads(response.text)
+        return article_data
+    except Exception as e:
+        print(f"❌ AI執筆エラー: {e}")
+        return None
+
+# ==========================================
+# ★ 5. WordPressへの自動投稿
+# ==========================================
+def post_to_wordpress(article_data):
+    """生成された記事データをWordPressのREST APIで投稿・メタ保存する"""
+    if not WP_URL or not WP_USER or not WP_APP_PASS:
+        print("⚠️ WPの認証情報がないため投稿をスキップします。")
+        return None
+
+    print("🚀 WordPressへ記事を送信中...")
+    
+    # 1. 本文のショートコード生成
+    items_str_list = []
+    for item in article_data.get('items', []):
+        # 画像URLは空でOKなので "|" をつける
+        items_str_list.append(f"{item['name']}|")
+    items_str = ", ".join(items_str_list)
+    
+    content = f'[vote_bar items="{items_str}"]\n\n[vote_summary items="{items_str}"]'
+
+    # 2. 記事の基本データの送信
+    wp_api_url = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts"
+    auth = (WP_USER, WP_APP_PASS)
+    
+    # ※カテゴリIDは環境に合わせて変更してください（現在はデフォルト未指定）
+    post_payload = {
+        "title": article_data.get('post_title', 'タイトル未定'),
+        "content": content,
+        "status": "publish"
+    }
+    
+    res = requests.post(wp_api_url, auth=auth, json=post_payload, timeout=30)
+    
+    if res.status_code == 201:
+        res_data = res.json()
+        post_id = res_data.get("id")
+        post_link = res_data.get("link")
+        print(f"✅ 記事投稿成功! (Post ID: {post_id})")
         
-        if check_exists(item['title']):
-            continue
+        # 3. カスタムメタデータ（カスタムフィールド）の保存
+        meta_payload = {
+            "meta": {
+                "wiki_h2_title": article_data.get("h2_title", ""),
+                "wiki_h2_text": article_data.get("intro", ""),
+                "wiki_fact_h3": article_data.get("trivia_title", ""),
+                "wiki_info_fact": article_data.get("trivia_text", "")
+            }
+        }
+        
+        # 選択肢のメタデータを追加
+        for i, item in enumerate(article_data.get("items", [])[:10]):
+            idx = i + 1
+            meta_payload["meta"][f"wiki_item_name_{idx}"] = item["name"]
+            meta_payload["meta"][f"wiki_item_img_{idx}"] = ""
+            meta_payload["meta"][f"wiki_info{idx}_h3"] = f"{item['name']}派の意見"
+            meta_payload["meta"][f"wiki_info_{idx}"] = item["desc"]
+
+        # メタデータをPOSTで更新（WordPress側のREST API許可設定が必要）
+        meta_res = requests.post(f"{wp_api_url}/{post_id}", auth=auth, json=meta_payload)
+        if meta_res.status_code == 200:
+            print("✅ カスタムフィールドの保存も完了しました！")
+        else:
+            print(f"⚠️ メタデータの保存に失敗しました: {meta_res.text}")
             
-        ai_data = generate_article_plan(item)
-        if ai_data:
-            if post_to_wordpress(ai_data):
-                count += 1
-                try: 
-                    msg = f"🆕 記事作成: {ai_data['title']}\n{WP_URL}/wp-admin/"
-                    requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
-                except: pass
-                
-        print("   ☕ 休憩中(15s)...")
-        time.sleep(15)
+        return {"link": post_link, "id": post_id}
+    else:
+        print(f"❌ WP投稿エラー: {res.status_code} - {res.text}")
+        return None
 
-    print(f"\n🏁 完了: {count}件作成")
-
+# ==========================================
+# ★ メイン処理
+# ==========================================
 if __name__ == "__main__":
-    main()
+    print("=== どっちよ.com AI自動投稿システム v71 スタート ===")
+    
+    # 1. ニュースの取得と仕分け
+    tier1, tier2, tier3 = get_mega_trends_and_entertainment_news()
+    
+    # 探索順序（Tier1 -> Tier2 -> Tier3）
+    search_queue = tier1 + tier2 + tier3
+    
+    if not search_queue:
+        print("💤 48時間以内のニュースが1件もありませんでした。処理を終了します。")
+        sys.exit(0)
+        
+    posted_count = 0
+    
+    # 2. AI編集長による査定と執筆
+    for news in search_queue:
+        # すでに1件投稿したら、スパム化防止のため今回は終了する
+        if posted_count >= 1:
+            break
+            
+        editor_verdict = ask_ai_editor(news)
+        
+        if editor_verdict.get("score", 0) >= 70:
+            print(f"🎉 70点突破！記事の生成に進みます。")
+            article = generate_article_content(news, editor_verdict)
+            
+            if article:
+                post_result = post_to_wordpress(article)
+                if post_result:
+                    posted_count += 1
+                    post_link = post_result["link"]
+                    post_id = post_result["id"]
+                    
+                    # 編集用のログインURLを生成
+                    edit_url = f"{WP_URL.rstrip('/')}/wp-admin/post.php?post={post_id}&action=edit"
+                    
+                    # Discordへ通知
+                    if DISCORD_WEBHOOK_URL:
+                        discord_data = {
+                            "content": f"🎉 **新しい論争記事が自動投稿されました！**\n\n**【タイトル】**\n{article.get('post_title')}\n\n**【公開URL】**\n{post_link}\n\n**【ログインURL（編集画面）】**\n{edit_url}"
+                        }
+                        try:
+                            requests.post(DISCORD_WEBHOOK_URL, json=discord_data)
+                            print("🔔 Discordに通知を送信しました")
+                        except Exception as e:
+                            print(f"⚠️ Discord通知エラー: {e}")
+        else:
+            print(f"🗑️ ボツ（点数不足）。次のニュースを探します...\n")
+
+    if posted_count == 0:
+        print("💤 今回はAI編集長が合格を出す熱いネタがありませんでした。")
+        
+    print("=== 処理終了 ===")
