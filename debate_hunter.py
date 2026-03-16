@@ -5,7 +5,7 @@ import json
 import time
 import requests
 import feedparser
-import re  # 重複チェック強化用
+import re
 from datetime import datetime, timedelta
 import pytz
 import random
@@ -26,7 +26,6 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
 
 # 使用モデル
 MODEL_NAME = "gemma-3-27b-it"
-IMAGE_MODEL_NAME = "imagen-3.0-generate-002"  # ★ Imagen 3 の正しいモデル名
 
 # コンプラ制限を最大限解除
 SAFETY_SETTINGS = [
@@ -67,7 +66,7 @@ def clean_title(text):
     return re.sub(r'[^\w\s]', '', text).replace(' ', '').replace('　', '')
 
 def get_all_existing_titles():
-    """重複投稿防止のため過去タイトルを全取得。ページネーション対応。"""
+    """重複投稿防止のため過去タイトルを全取得。"""
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
     page = 1
@@ -79,7 +78,6 @@ def get_all_existing_titles():
             posts = res.json()
             if not posts: break
             for p in posts:
-                # 比較用にクリーンアップしたタイトルを保存
                 titles.append(clean_title(p['title']['rendered']))
             if len(posts) < 100: break
             page += 1
@@ -144,7 +142,7 @@ def get_mega_trends_and_entertainment_news():
     return tier1, tier2, tier3
 
 # ==========================================
-# ★ 4. API通信（Gemma 3 27Bパース＆画像生成）
+# ★ 4. API通信（Gemma 3 27Bパース強化版）
 # ==========================================
 
 def call_gemini_api(prompt, retries=2):
@@ -176,45 +174,6 @@ def call_gemini_api(prompt, retries=2):
         except Exception as e:
             print(f"   ❌ 通信/パースエラー: {e}")
             time.sleep(5)
-    return None
-
-def generate_image_by_ai(prompt):
-    """Imagen 3 を使用してアイキャッチ画像を生成する（修正版）。"""
-    print(f"🎨 AI画像生成中 (Prompt: {prompt[:30]}...)")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{IMAGE_MODEL_NAME}:predict?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {"sampleCount": 1}
-    }
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=90)
-        if res.status_code == 200:
-            img_b64 = res.json()['predictions'][0]['bytesBase64Encoded']
-            return base64.b64decode(img_b64)
-        else:
-            print(f"   ❌ 画像生成エラー ({res.status_code}): {res.text[:100]}")
-    except Exception as e:
-        print(f"   ❌ 画像生成通信エラー: {e}")
-    return None
-
-def upload_image_to_wp(img_binary, filename="eyecatch.png"):
-    """WordPressのメディアライブラリに画像をアップロードし、IDを取得する。"""
-    print("📤 画像をWordPressへアップロード中...")
-    url = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/media"
-    headers = {
-        'Authorization': get_auth_header()['Authorization'],
-        'Content-Disposition': f'attachment; filename={filename}',
-        'Content-Type': 'image/png'
-    }
-    try:
-        res = requests.post(url, headers=headers, data=img_binary, timeout=40)
-        if res.status_code == 201:
-            return res.json().get('id')
-        else:
-            print(f"   ❌ 画像アップロード失敗 ({res.status_code})")
-    except Exception as e:
-        print(f"   ❌ 画像アップロードエラー: {e}")
     return None
 
 # ==========================================
@@ -255,7 +214,7 @@ def ask_ai_editor(news_item):
     return {"score": 0}
 
 # ==========================================
-# ★ 6. 記事生成（事実ベース徹底 ＋ 画像プロンプト追加）
+# ★ 6. 記事生成（事実ベース徹底）
 # ==========================================
 
 def get_comment_personas(count=6):
@@ -270,7 +229,7 @@ def get_comment_personas(count=6):
     return "\n".join([f"- {k}: {defs[k]}" for k in keys])
 
 def generate_article_content(news_item, editor_data):
-    """記事本編、豆知識、サクラコメント、アイキャッチ用プロンプトを統合生成。"""
+    """記事本編、豆知識、サクラコメントを統合生成。"""
     print(f"✍️ AIライターが記事とコメントを執筆中...")
     title = news_item['title']
     cands = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
@@ -287,10 +246,8 @@ def generate_article_content(news_item, editor_data):
     - 必ず「どっち？」「どれ？」と心の中で補って意味が通る疑問形にする。
     - 【重要】「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
     - 事実をベースにしつつ、読者に冷静な議論や選択を促すトーンにすること。
-
-    【画像プロンプト (image_prompt) について】
-    - 記事のアイキャッチ画像を生成するための「英語」のプロンプトを作成せよ。
-    - 著作権に触れる固有名詞（キャラクター名など）は避け、テーマの「概念」を表すようなスタイリッシュな画像を指定すること。
+    - 悪い例：「【炎上】Fateリメイク中止！バンナムは期待を裏切ったのか？」
+    - 良い例：「Fateリメイク販売中止。バンナムの判断は妥当？それとも？」
 
     【ペルソナ指定】
     {personas}
@@ -302,7 +259,6 @@ def generate_article_content(news_item, editor_data):
       "category_slug": "contents",
       "h2_title": "議論の核心を突く見出し",
       "intro": "背景解説(約300字)",
-      "image_prompt": "English prompt for Imagen 3 generation",
       "items": [
         {{ "name": "選択肢1", "desc": "代弁(約200字)" }}
       ],
@@ -316,23 +272,14 @@ def generate_article_content(news_item, editor_data):
     return call_gemini_api(prompt)
 
 # ==========================================
-# ★ 7. 投稿処理（画像設定＆投票数演出強化）
+# ★ 7. 投稿処理（演出強化版・画像生成なし）
 # ==========================================
 
 def post_to_wordpress(article_data):
-    """記事投稿、画像生成・設定、メタデータ保存、コメント個別投稿を省略なしで行う。"""
+    """記事投稿、メタデータ保存、コメント個別投稿を省略なしで行う。"""
     print("🚀 WordPressへ送信中...")
     
-    # --- 1. アイキャッチ画像の生成とWPアップロード ---
-    media_id = None
-    if article_data.get("image_prompt"):
-        img_binary = generate_image_by_ai(article_data["image_prompt"])
-        if img_binary:
-            media_id = upload_image_to_wp(img_binary)
-            if media_id:
-                print(f"   ✅ 画像設定成功 (Media ID: {media_id})")
-
-    # --- 2. 投票数の演出的ランダム化ロジック ---
+    # --- 投票数の演出的ランダム化ロジック ---
     items = article_data.get('items', [])
     mode = random.choice(['接戦', '圧倒的', '中程度', '僅差'])
     
@@ -364,9 +311,6 @@ def post_to_wordpress(article_data):
         "categories": [get_term_id(article_data.get('category_slug', 'contents'))],
         "slug": article_data.get('slug', 'post')
     }
-    # 画像IDが取得できていれば、アイキャッチとしてセット
-    if media_id:
-        post_payload["featured_media"] = media_id
     
     try:
         res = requests.post(wp_api_url, headers=auth_header, json=post_payload, timeout=40)
@@ -376,7 +320,7 @@ def post_to_wordpress(article_data):
             post_link = res_data.get("link")
             print(f"✅ 記事投稿成功! (ID: {post_id})")
             
-            # --- 3. カスタムフィールド（メタデータ）の網羅的な保存 ---
+            # --- カスタムフィールド（メタデータ）保存 ---
             meta_payload = {
                 "meta": {
                     "post_views_count": "0",
@@ -390,7 +334,7 @@ def post_to_wordpress(article_data):
             for i, item in enumerate(items[:10]):
                 idx = i + 1
                 meta_payload["meta"][f"wiki_item_name_{idx}"] = item["name"]
-                meta_payload["meta"][f"wiki_item_img_{idx}"] = "" # 空文字初期化
+                meta_payload["meta"][f"wiki_item_img_{idx}"] = ""
                 meta_payload["meta"][f"wiki_info{idx}_h3"] = f"{item['name']}の意見"
                 meta_payload["meta"][f"wiki_info_{idx}"] = item["desc"]
                 
@@ -403,7 +347,7 @@ def post_to_wordpress(article_data):
 
             requests.post(f"{wp_api_url}/{post_id}", headers=auth_header, json=meta_payload, timeout=25)
             
-            # --- 4. 初期コメントの個別投稿 ---
+            # --- 初期コメントの個別投稿 ---
             comments = article_data.get('comments', [])
             if comments:
                 print(f"💬 コメント投稿中({len(comments)}件)...", end="")
@@ -434,7 +378,7 @@ def post_to_wordpress(article_data):
 # ==========================================
 
 if __name__ == "__main__":
-    print("=== どっちよ.com AI自動投稿システム V91 (画像生成リベンジ＆演出統合版) ===")
+    print("=== どっちよ.com AI自動投稿システム V92 (画像撤去・最安定版) ===")
     
     # 既存タイトル取得（比較用にクリーンアップ済み）
     existing_titles = get_all_existing_titles()
@@ -451,35 +395,28 @@ if __name__ == "__main__":
     for news in search_queue:
         if posted_count >= 1: break
             
-        # 査定
         verdict = ask_ai_editor(news)
-        
-        # API制限回避（15秒待機）
         print("   ⏳ 待機中(15s)...")
         time.sleep(15)
         
         if verdict and verdict.get("score", 0) >= 70:
             print(f"🎉 70点突破！合格。")
-            
-            # 記事生成
             article = generate_article_content(news, verdict)
             
             if article:
-                # ★ 重複チェックの強化：記号等を無視したクリーンアップ比較
+                # ★ 重複チェック：記号等を無視したクリーンアップ比較
                 if clean_title(article.get('post_title')) in existing_titles:
                     print(f"   🚫 重複スキップ（類似タイトル検知）: {article.get('post_title')}")
                     continue
                     
-                # 投稿実行
                 res = post_to_wordpress(article)
                 
                 if res:
                     posted_count += 1
-                    # Discord通知
                     if DISCORD_WEBHOOK_URL:
                         edit_url = f"{WP_URL.rstrip('/')}/wp-admin/post.php?post={res['id']}&action=edit"
                         discord_payload = {
-                            "content": f"🔥 **新しい論争を投下しました！**\n\n**【タイトル】**\n{res['title']}\n\n**【URL】**\n{res['link']}\n\n**【編集】**\n{edit_url}"
+                            "content": f"🔥 **新しい議論を投下しました！**\n\n**【タイトル】**\n{res['title']}\n\n**【URL】**\n{res['link']}\n\n**【編集】**\n{edit_url}"
                         }
                         try:
                             d_res = requests.post(DISCORD_WEBHOOK_URL, json=discord_payload, timeout=15)
