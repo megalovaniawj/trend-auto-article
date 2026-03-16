@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 import pytz
 import random
 import base64
-import io
 
 # ==========================================
 # ★ 1. 設定エリア
@@ -174,50 +173,7 @@ def call_gemini_api(prompt, retries=2):
     return None
 
 # ==========================================
-# ★ 5. 画像生成 & WPアップロード (新規追加)
-# ==========================================
-
-def generate_image_by_ai(prompt):
-    """Imagen 3を使用して画像を生成しバイナリで返す。"""
-    print(f"🎨 AI画像生成中 (Prompt: {prompt[:40]}...)")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3:generateImages?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {"sampleCount": 1}
-    }
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=90)
-        if res.status_code == 200:
-            img_b64 = res.json()['predictions'][0]['bytesBase64Encoded']
-            return base64.b64decode(img_b64)
-        else:
-            print(f"   ❌ 画像生成失敗 ({res.status_code})")
-    except Exception as e:
-        print(f"   ❌ 画像生成エラー: {e}")
-    return None
-
-def upload_image_to_wp(img_binary, filename="eyecatch.png"):
-    """画像をWordPressのメディアライブラリにアップロードしてIDを返す。"""
-    print("📤 画像をWordPressへアップロード中...")
-    url = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/media"
-    headers = {
-        'Authorization': get_auth_header()['Authorization'],
-        'Content-Disposition': f'attachment; filename={filename}',
-        'Content-Type': 'image/png'
-    }
-    try:
-        res = requests.post(url, headers=headers, data=img_binary, timeout=40)
-        if res.status_code == 201:
-            return res.json().get('id')
-        else:
-            print(f"   ❌ 画像アップロード失敗 ({res.status_code})")
-    except Exception as e:
-        print(f"   ❌ 画像アップロードエラー: {e}")
-    return None
-
-# ==========================================
-# ★ 6. AI編集長（査定：エンタメ特化＆選択肢洗練）
+# ★ 5. AI編集長（査定：エンタメ特化＆選択肢洗練）
 # ==========================================
 
 def ask_ai_editor(news_item):
@@ -254,7 +210,7 @@ def ask_ai_editor(news_item):
     return {"score": 0}
 
 # ==========================================
-# ★ 7. 記事生成（事実ベース徹底 + 画像プロンプト）
+# ★ 6. 記事生成（事実ベース徹底）
 # ==========================================
 
 def get_comment_personas(count=6):
@@ -269,7 +225,7 @@ def get_comment_personas(count=6):
     return "\n".join([f"- {k}: {defs[k]}" for k in keys])
 
 def generate_article_content(news_item, editor_data):
-    """記事本編、豆知識、サクラコメント、画像プロンプトを統合生成。"""
+    """記事本編、豆知識、サクラコメントを統合生成。"""
     print(f"✍️ AIライターが記事とコメントを執筆中...")
     title = news_item['title']
     cands = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
@@ -284,26 +240,23 @@ def generate_article_content(news_item, editor_data):
     【タイトル作成の厳格ルール】
     - 30文字以内。
     - 必ず「どっち？」「どれ？」と心の中で補って意味が通る疑問形にする。
-    - 【重要】「【炎上】」「【悲報】」「【激論】」のような煽りワードは一切禁止。
-    - 事実ベースで読者に選択を促すこと。
-
-    【画像プロンプト作成ルール】
-    - 記事内容を象徴するスタイリッシュで高品質なイメージ（3Dレンダリング、アニメスタイル、またはフォトリアル）を生成するための英語プロンプトを作成せよ。
-    - 著作権に触れるキャラクター名は避け、概念的に表現すること。
+    - 【重要】「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
+    - 事実をベースにしつつ、読者に冷静な議論や選択を促すトーンにすること。
+    - 悪い例：「【炎上】Fateリメイク中止！バンナムは期待を裏切ったのか？」
+    - 良い例：「Fateリメイク販売中止。バンナムの判断は妥当？それとも？」
 
     【ペルソナ指定】
     {personas}
 
     出力JSON:
     {{
-      "post_title": "疑問形タイトル",
+      "post_title": "事実ベースの疑問形タイトル",
       "slug": "english-slug",
       "category_slug": "contents",
-      "h2_title": "議論の見出し",
+      "h2_title": "議論の核心を突く見出し",
       "intro": "背景解説(約300字)",
-      "image_prompt": "English prompt for high quality 16:9 image",
       "items": [
-        {{ "name": "選択肢1", "desc": "代弁(約200字)" }}
+        {{ "name": "選択肢1", "desc": "代弁(約200字)", "votes": 123 }}
       ],
       "trivia_title": "豆知識見出し",
       "trivia_text": "解説(300字)",
@@ -315,34 +268,14 @@ def generate_article_content(news_item, editor_data):
     return call_gemini_api(prompt)
 
 # ==========================================
-# ★ 8. 投稿処理（演出強化＆画像紐付け）
+# ★ 7. 投稿処理（V74/V81流の丁寧な全機能実装）
 # ==========================================
 
 def post_to_wordpress(article_data):
-    """記事投稿、画像生成、メタデータ保存、コメント投稿を完璧に行う。"""
+    """記事投稿、メタデータ保存、コメント個別投稿を省略なしで行う。"""
     print("🚀 WordPressへ送信中...")
     
-    # --- アイキャッチ画像生成 & アップロード ---
-    media_id = None
-    if article_data.get("image_prompt"):
-        img_binary = generate_image_by_ai(article_data["image_prompt"])
-        if img_binary:
-            media_id = upload_image_to_wp(img_binary)
-    
-    # --- 投票数の演出的ランダム化ロジック ---
     items = article_data.get('items', [])
-    mode = random.choice(['接戦', '圧倒的', '中程度', '僅差'])
-    
-    for i, item in enumerate(items):
-        if mode == '接戦':
-            item['votes'] = random.randint(180, 230)
-        elif mode == '圧倒的':
-            item['votes'] = random.randint(450, 700) if i == 0 else random.randint(10, 40)
-        elif mode == '僅差':
-            item['votes'] = random.randint(300, 350) if i == 0 else random.randint(250, 290)
-        else: # 中程度
-            item['votes'] = random.randint(350, 500) if i == 0 else random.randint(100, 200)
-
     items_str_list = [f"{item['name']}|" for item in items]
     items_str = ", ".join(items_str_list)
     content = f'[vote_bar items="{items_str}"]\n\n[vote_summary items="{items_str}"]'
@@ -350,6 +283,7 @@ def post_to_wordpress(article_data):
     wp_api_url = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts"
     auth_header = get_auth_header()
     
+    # 公開時間を過去にずらして即時反映（V74流）
     post_time = datetime.now() - timedelta(minutes=random.randint(10, 25))
     
     post_payload = {
@@ -358,8 +292,7 @@ def post_to_wordpress(article_data):
         "status": "publish",
         "date": post_time.strftime('%Y-%m-%dT%H:%M:%S'),
         "categories": [get_term_id(article_data.get('category_slug', 'contents'))],
-        "slug": article_data.get('slug', 'post'),
-        "featured_media": media_id  # 画像IDをセット
+        "slug": article_data.get('slug', 'post')
     }
     
     try:
@@ -370,7 +303,7 @@ def post_to_wordpress(article_data):
             post_link = res_data.get("link")
             print(f"✅ 記事投稿成功! (ID: {post_id})")
             
-            # --- カスタムフィールド（メタデータ）保存 ---
+            # --- カスタムフィールド（メタデータ）の網羅的な保存 ---
             meta_payload = {
                 "meta": {
                     "post_views_count": "0",
@@ -381,21 +314,25 @@ def post_to_wordpress(article_data):
                 }
             }
             
+            # 投票・アイテム詳細（省略なし）
             for i, item in enumerate(items[:10]):
                 idx = i + 1
                 meta_payload["meta"][f"wiki_item_name_{idx}"] = item["name"]
-                meta_payload["meta"][f"wiki_item_img_{idx}"] = ""
+                meta_payload["meta"][f"wiki_item_img_{idx}"] = "" # 空文字初期化
                 meta_payload["meta"][f"wiki_info{idx}_h3"] = f"{item['name']}の意見"
                 meta_payload["meta"][f"wiki_info_{idx}"] = item["desc"]
-                meta_payload["meta"][f'vote_multi_idx_{i}'] = str(item['votes'])
+                
+                votes = item.get('votes', random.randint(40, 250))
+                meta_payload["meta"][f'vote_multi_idx_{i}'] = str(votes)
                 
                 if len(items) == 2:
                     k = 'vote_count_a' if i == 0 else 'vote_count_b'
-                    meta_payload["meta"][k] = str(item['votes'])
+                    meta_payload["meta"][k] = str(votes)
 
+            # メタデータ更新POST
             requests.post(f"{wp_api_url}/{post_id}", headers=auth_header, json=meta_payload, timeout=25)
             
-            # --- 初期コメント個別投稿 ---
+            # --- 初期コメントの個別投稿（V74完全移植） ---
             comments = article_data.get('comments', [])
             if comments:
                 print(f"💬 コメント投稿中({len(comments)}件)...", end="")
@@ -422,13 +359,16 @@ def post_to_wordpress(article_data):
     return None
 
 # ==========================================
-# ★ 9. メインループ
+# ★ 8. メインループ
 # ==========================================
 
 if __name__ == "__main__":
-    print("=== どっちよ.com AI自動投稿システム V89 (画像生成＆演出強化版) ===")
+    print("=== どっちよ.com AI自動投稿システム V86 (V84復旧＋最新修正版) ===")
     
+    # 既存タイトル取得
     existing_titles = get_all_existing_titles()
+    
+    # ニュース収集
     tier1, tier2, tier3 = get_mega_trends_and_entertainment_news()
     search_queue = tier1 + tier2 + tier3
     
@@ -440,34 +380,44 @@ if __name__ == "__main__":
     for news in search_queue:
         if posted_count >= 1: break
             
+        # 査定
         verdict = ask_ai_editor(news)
+        
+        # API制限回避（15秒待機）
         print("   ⏳ 待機中(15s)...")
         time.sleep(15)
         
         if verdict and verdict.get("score", 0) >= 70:
             print(f"🎉 70点突破！合格。")
+            
+            # 記事生成
             article = generate_article_content(news, verdict)
             
             if article:
+                # 重複チェック
                 if article.get('post_title') in existing_titles:
                     print(f"   🚫 重複スキップ: {article.get('post_title')}")
                     continue
                     
+                # 投稿実行
                 res = post_to_wordpress(article)
                 
                 if res:
                     posted_count += 1
+                    # Discord通知
                     if DISCORD_WEBHOOK_URL:
                         edit_url = f"{WP_URL.rstrip('/')}/wp-admin/post.php?post={res['id']}&action=edit"
                         discord_payload = {
-                            "content": f"🔥 **新しい論争を投下しました！(AI画像生成済)**\n\n**【タイトル】**\n{res['title']}\n\n**【URL】**\n{res['link']}\n\n**【編集】**\n{edit_url}"
+                            "content": f"🔥 **新しい論争を投下しました！**\n\n**【タイトル】**\n{res['title']}\n\n**【URL】**\n{res['link']}\n\n**【編集】**\n{edit_url}"
                         }
                         try:
                             d_res = requests.post(DISCORD_WEBHOOK_URL, json=discord_payload, timeout=15)
-                            d_res.raise_for_status() 
+                            d_res.raise_for_status() # ★これがないと400/401エラーをスルーしてしまいます
                             print("🔔 Discord通知送信完了")
                         except Exception as e:
                             print(f"⚠️ Discord通知失敗: {e}")
+                    else:
+                        print("⚠️ DISCORD_WEBHOOK_URL が環境変数に設定されていないため、通知をスキップしました。設定を確認してください。")
         else:
             print(f"🗑️ ボツ（{verdict.get('score', 0) if verdict else 'Error'}点）。次へ...\n")
 
