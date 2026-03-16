@@ -210,7 +210,7 @@ def ask_ai_editor(news_item):
     return {"score": 0}
 
 # ==========================================
-# ★ 6. 記事生成（煽りタイトル徹底）
+# ★ 6. 記事生成（事実ベース徹底）
 # ==========================================
 
 def get_comment_personas(count=6):
@@ -232,7 +232,7 @@ def generate_article_content(news_item, editor_data):
     personas = get_comment_personas(6)
     
     prompt = f"""
-    論争サイト「どっちよ.com」の編集長として、煽り記事をJSONで作成せよ。
+    論争サイト「どっちよ.com」の編集長として、記事をJSONで作成せよ。
 
     【ニュース】 {title}
     【選択肢】 {cands}
@@ -240,19 +240,20 @@ def generate_article_content(news_item, editor_data):
     【タイトル作成の厳格ルール】
     - 30文字以内。
     - 必ず「どっち？」「どれ？」と心の中で補って意味が通る疑問形にする。
-    - 読者がどちらかの陣営に立ちたくなる「煽り」を必ず入れる。
-    - 悪い例：「WBC騒動の全貌」「Netflix幹部の発言は？」
-    - 良い例：「【激論】WBC批判のNetflix幹部、正論か？それとも的外れか？」
+    - 【重要】「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
+    - 事実をベースにしつつ、読者に冷静な議論や選択を促すトーンにすること。
+    - 悪い例：「【炎上】Fateリメイク中止！バンナムは期待を裏切ったのか？」
+    - 良い例：「Fateリメイク販売中止。バンナムの判断は妥当？それとも？」
 
     【ペルソナ指定】
     {personas}
 
     出力JSON:
     {{
-      "post_title": "煽りタイトル",
+      "post_title": "事実ベースの疑問形タイトル",
       "slug": "english-slug",
       "category_slug": "contents",
-      "h2_title": "煽り見出し",
+      "h2_title": "議論の核心を突く見出し",
       "intro": "背景解説(約300字)",
       "items": [
         {{ "name": "選択肢1", "desc": "代弁(約200字)", "votes": 123 }}
@@ -362,7 +363,7 @@ def post_to_wordpress(article_data):
 # ==========================================
 
 if __name__ == "__main__":
-    print("=== どっちよ.com AI自動投稿システム V84 (Discord検知修復版) ===")
+    print("=== どっちよ.com AI自動投稿システム V86 (V84復旧＋最新修正版) ===")
     
     # 既存タイトル取得
     existing_titles = get_all_existing_titles()
@@ -415,6 +416,8 @@ if __name__ == "__main__":
                             print("🔔 Discord通知送信完了")
                         except Exception as e:
                             print(f"⚠️ Discord通知失敗: {e}")
+                    else:
+                        print("⚠️ DISCORD_WEBHOOK_URL が環境変数に設定されていないため、通知をスキップしました。設定を確認してください。")
         else:
             print(f"🗑️ ボツ（{verdict.get('score', 0) if verdict else 'Error'}点）。次へ...\n")
 
