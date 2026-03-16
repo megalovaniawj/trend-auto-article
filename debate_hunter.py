@@ -17,7 +17,7 @@ WP_URL = "https://docchiyo.com"
 WP_USER = "bear"
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1471795668791070783/YpkOhjLQ6pETVn6Vr1_9HKazcE4QLG7bPb1hBvsajtWm5W9SFbCL3_mF5c0YSgi1dvOF"
 
 if not WP_APP_PASS or not GEMINI_API_KEY:
     print("❌ エラー: 環境変数が設定されていません。")
