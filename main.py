@@ -46,7 +46,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
     sys.exit(1)
 
 MODEL_NAME = "gemma-3-27b-it"
-ARTICLES_TO_CREATE = 3
+ARTICLES_TO_CREATE = 2
 
 # コンプラ回避設定
 SAFETY_SETTINGS = [
