@@ -66,11 +66,16 @@ def clean_title(text):
     if not text: return ""
     return re.sub(r'[^\w\s]', '', text).replace(' ', '').replace('　', '')
 
+def normalize_text(text):
+    """★追加: テーマ重複チェック用。大文字小文字・記号を無視して比較力を上げる"""
+    if not text: return ""
+    return clean_title(text).lower()
+
 def get_existing_data():
     """★修正: 重複投稿防止のための完全タイトル一覧と、3日以内の生タイトル一覧を取得"""
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
-    recent_titles = []
+    recent_titles_normalized = []
     page = 1
     three_days_ago = datetime.now() - timedelta(days=3)
 
@@ -86,19 +91,19 @@ def get_existing_data():
                 # 完全重複チェック用にクリーンアップして保存
                 titles.append(clean_title(title_text))
                 
-                # 3日以内の記事か判定し、生タイトルを保存（テーマ重複チェック用）
+                # 3日以内の記事か判定し、テーマ重複チェック用（正規化済）に保存
                 post_date_str = p['date']
                 post_date = datetime.strptime(post_date_str, "%Y-%m-%dT%H:%M:%S")
                 if post_date > three_days_ago:
-                    recent_titles.append(title_text)
+                    recent_titles_normalized.append(normalize_text(title_text))
 
             if len(posts) < 100: break
             page += 1
         except Exception as e:
             print(f"\n⚠️ 過去記事取得エラー: {e}")
             break
-    print(f" -> 合計 {len(titles)} 件取得 (うち直近3日: {len(recent_titles)}件)")
-    return titles, recent_titles
+    print(f" -> 合計 {len(titles)} 件取得 (うち直近3日: {len(recent_titles_normalized)}件)")
+    return titles, recent_titles_normalized
 
 def get_term_id(slug):
     """カテゴリーID取得。存在しなければ作成。"""
@@ -249,10 +254,10 @@ def generate_article_content(news_item, editor_data):
     title = news_item['title']
     cands = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
     
-    # ★修正: コメント数を10〜20の間でランダムに決定
     comment_count = random.randint(10, 20)
     persona_instruction = get_natural_personas(comment_count)
     
+    # ★修正: タイトルのテンプレ化を防ぐためのプロンプト強化
     prompt = f"""
     論争サイト「どっちよ.com」の編集長として、記事をJSONで作成せよ。
 
@@ -263,9 +268,9 @@ def generate_article_content(news_item, editor_data):
     - 30文字以内。
     - 必ず「どっち？」「どれ？」と心の中で補って意味が通る疑問形にする。
     - 「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
-    - 【重要】抽象的・淡白なタイトルは禁止。ニュースの具体的な固有名詞（商品名、作品名、人物名など）を必ず含め、何について議論しているか一目でわかるようにすること。
+    - 【重要】「〜？それとも…？」のようなテンプレ構文は絶対に使用禁止。抽象的・淡白なタイトルも禁止し、ニュースの具体的な固有名詞（商品名、作品名、人物名など）を必ず含め、何について議論しているか一目でわかるようにすること。
     - 悪い例：「新SNSは普及する？」「あのコラボは成功？」
-    - 良い例：「Fateリメイク販売中止。バンナムの判断は妥当？それとも？」
+    - 良い例：「サイボーグ009の新作アニメ、旧作ファンは受け入れられる？」
 
     【コメント生成指示】
     {persona_instruction}
@@ -403,9 +408,8 @@ def post_to_wordpress(article_data):
 if __name__ == "__main__":
     print("=== どっちよ.com AI自動投稿システム V92改 (具体化・3日間制限・自然コメント版) ===")
     
-    # 既存タイトル取得（比較用にクリーンアップ済みのリストと、3日以内の生タイトルリストを取得）
-    existing_titles, recent_titles = get_existing_data()
-    recent_texts_combined = " ".join(recent_titles) # 検索しやすいように結合しておく
+    # 既存タイトル取得（比較用にクリーンアップ済みのリストと、3日以内の正規化済みタイトルリストを取得）
+    existing_titles, recent_titles_normalized = get_existing_data()
     
     # ニュース収集
     tier1, tier2, tier3 = get_mega_trends_and_entertainment_news()
@@ -426,10 +430,19 @@ if __name__ == "__main__":
         if verdict and verdict.get("score", 0) >= 70:
             print(f"🎉 70点突破！合格。")
             
-            # ★ 追加: 3日以内のテーマ重複制限
-            core_topic = verdict.get("core_topic", "")
-            if core_topic and len(core_topic) > 1 and core_topic in recent_texts_combined:
-                print(f"   🚫 3日以内の重複テーマ検知（{core_topic}）のためスキップ")
+            # ★ 修正: 3日以内のテーマ重複制限をより強力に（表記揺れ吸収）
+            raw_core_topic = verdict.get("core_topic", "")
+            core_topic = normalize_text(raw_core_topic)
+            is_duplicate_theme = False
+            
+            if core_topic and len(core_topic) >= 2: # 最低2文字以上で判定
+                for rt in recent_titles_normalized:
+                    if core_topic in rt:
+                        is_duplicate_theme = True
+                        break
+            
+            if is_duplicate_theme:
+                print(f"   🚫 3日以内の重複テーマ検知（{raw_core_topic}）のためスキップ")
                 continue
 
             article = generate_article_content(news, verdict)
