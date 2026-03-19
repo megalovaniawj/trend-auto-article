@@ -63,29 +63,42 @@ def get_auth_header():
 
 def clean_title(text):
     """記号や空白を除去して純粋な文字列にする（重複チェック用）"""
+    if not text: return ""
     return re.sub(r'[^\w\s]', '', text).replace(' ', '').replace('　', '')
 
-def get_all_existing_titles():
-    """重複投稿防止のため過去タイトルを全取得。"""
+def get_existing_data():
+    """★修正: 重複投稿防止のための完全タイトル一覧と、3日以内の生タイトル一覧を取得"""
     print("📚 過去記事を全件チェック中...", end="")
     titles = []
+    recent_titles = []
     page = 1
+    three_days_ago = datetime.now() - timedelta(days=3)
+
     while True:
         try:
-            url = f"{WP_URL}/wp-json/wp/v2/posts?per_page=100&page={page}&fields=title"
+            url = f"{WP_URL}/wp-json/wp/v2/posts?per_page=100&page={page}&fields=title,date"
             res = requests.get(url, headers=get_auth_header(), timeout=25)
             if res.status_code != 200: break
             posts = res.json()
             if not posts: break
             for p in posts:
-                titles.append(clean_title(p['title']['rendered']))
+                title_text = p['title']['rendered']
+                # 完全重複チェック用にクリーンアップして保存
+                titles.append(clean_title(title_text))
+                
+                # 3日以内の記事か判定し、生タイトルを保存（テーマ重複チェック用）
+                post_date_str = p['date']
+                post_date = datetime.strptime(post_date_str, "%Y-%m-%dT%H:%M:%S")
+                if post_date > three_days_ago:
+                    recent_titles.append(title_text)
+
             if len(posts) < 100: break
             page += 1
         except Exception as e:
             print(f"\n⚠️ 過去記事取得エラー: {e}")
             break
-    print(f" -> 合計 {len(titles)} 件取得")
-    return titles
+    print(f" -> 合計 {len(titles)} 件取得 (うち直近3日: {len(recent_titles)}件)")
+    return titles, recent_titles
 
 def get_term_id(slug):
     """カテゴリーID取得。存在しなければ作成。"""
@@ -201,6 +214,7 @@ def ask_ai_editor(news_item):
     出力JSON:
     {{
       "score": 点数(0-100),
+      "core_topic": "ニュースのメインテーマとなる固有名詞（例：呪術廻戦、サイボーグ009、嵐 など。3日以内の重複判定に使用します）",
       "reason": "採点理由(100字程度)",
       "vote_type": "binary_plus",
       "candidates": ["選択肢1", "選択肢2", "中立/その他"]
@@ -211,29 +225,33 @@ def ask_ai_editor(news_item):
         print(f"   👉 判定: {result.get('score', 0)}点")
         print(f"   👉 理由: {result.get('reason')}")
         return result
-    return {"score": 0}
+    return {"score": 0, "core_topic": ""}
 
 # ==========================================
-# ★ 6. 記事生成（事実ベース徹底）
+# ★ 6. 記事生成（事実ベース徹底・コメント自然化）
 # ==========================================
 
-def get_comment_personas(count=6):
-    """V74流の多様なペルソナ指定。"""
-    defs = {
-        'normal': "普通。「〜だね」。", 'polite': "丁寧。「ですね」。",
-        'rough': "乱暴。「〜だろ」。", 'excited': "感情的。「〜すぎ！」。",
-        'slang': "ネット民。「草」。", 'otaku': "オタク。「尊い」。",
-        'simple': "一言。「これ。」。"
-    }
-    keys = random.choices(list(defs.keys()), k=count)
-    return "\n".join([f"- {k}: {defs[k]}" for k in keys])
+def get_natural_personas(count):
+    """★修正: コメントの件数を動的にし、掲示板風の自然な指示文に変更"""
+    return f"""
+    以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず {count} 個】生成してください。
+    
+    【★コメントの鉄則（絶対遵守）】
+    1. 「【選択肢名】」のような機械的な前置きは**絶対に書かない**こと。
+    2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。
+    3. 「やっぱこれだわ」「いや、普通に考えてそれはないだろ」「設定的にこっちが正解なんだよな」といった、感情的で生の声を意識すること。
+    4. 会話のライブ感を出すため、数件は「>>3 わかる」「それな」「異論は認める」のような、前のコメントへの反応（アンカーや同調）を含めること。
+    """
 
 def generate_article_content(news_item, editor_data):
-    """記事本編、豆知識、サクラコメントを統合生成。"""
+    """記事本編、豆知識、自然なコメントを統合生成。"""
     print(f"✍️ AIライターが記事とコメントを執筆中...")
     title = news_item['title']
     cands = json.dumps(editor_data.get('candidates', []), ensure_ascii=False)
-    personas = get_comment_personas(6)
+    
+    # ★修正: コメント数を10〜20の間でランダムに決定
+    comment_count = random.randint(10, 20)
+    persona_instruction = get_natural_personas(comment_count)
     
     prompt = f"""
     論争サイト「どっちよ.com」の編集長として、記事をJSONで作成せよ。
@@ -241,20 +259,20 @@ def generate_article_content(news_item, editor_data):
     【ニュース】 {title}
     【選択肢】 {cands}
 
-    【タイトル作成の厳格ルール】
+    【★タイトル作成の厳格ルール】
     - 30文字以内。
     - 必ず「どっち？」「どれ？」と心の中で補って意味が通る疑問形にする。
-    - 【重要】「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
-    - 事実をベースにしつつ、読者に冷静な議論や選択を促すトーンにすること。
-    - 悪い例：「【炎上】Fateリメイク中止！バンナムは期待を裏切ったのか？」
+    - 「【炎上】」「【悲報】」「【激論】」のような、わざとらしい煽りワードは一切使用しないこと。
+    - 【重要】抽象的・淡白なタイトルは禁止。ニュースの具体的な固有名詞（商品名、作品名、人物名など）を必ず含め、何について議論しているか一目でわかるようにすること。
+    - 悪い例：「新SNSは普及する？」「あのコラボは成功？」
     - 良い例：「Fateリメイク販売中止。バンナムの判断は妥当？それとも？」
 
-    【ペルソナ指定】
-    {personas}
+    【コメント生成指示】
+    {persona_instruction}
 
     出力JSON:
     {{
-      "post_title": "事実ベースの疑問形タイトル",
+      "post_title": "固有名詞を含んだ事実ベースの疑問形タイトル",
       "slug": "english-slug",
       "category_slug": "contents",
       "h2_title": "議論の核心を突く見出し",
@@ -265,7 +283,9 @@ def generate_article_content(news_item, editor_data):
       "trivia_title": "豆知識見出し",
       "trivia_text": "解説(300字)",
       "comments": [
-        {{ "name": "名前", "text": "コメント本文" }}
+        {{ "name": "匿名", "text": "やっぱこれ一択だろ" }},
+        {{ "name": "名無し", "text": ">>1 いや、普通に考えてこっちだわ" }}
+        // ... 指定された {comment_count} 件生成すること
       ]
     }}
     """
@@ -292,6 +312,9 @@ def post_to_wordpress(article_data):
             item['votes'] = random.randint(300, 350) if i == 0 else random.randint(250, 290)
         else: # 中程度
             item['votes'] = random.randint(350, 500) if i == 0 else random.randint(100, 200)
+
+        # 端数を少し散らす
+        if item['votes'] % 10 == 0: item['votes'] += random.randint(1, 9)
 
     items_str_list = [f"{item['name']}|" for item in items]
     items_str = ", ".join(items_str_list)
@@ -362,7 +385,7 @@ def post_to_wordpress(article_data):
                                           'status': 'approve', 
                                           'date': c_time.strftime('%Y-%m-%dT%H:%M:%S')
                                       }, timeout=15)
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                     except: continue
                 print(" 完了")
                 
@@ -378,10 +401,11 @@ def post_to_wordpress(article_data):
 # ==========================================
 
 if __name__ == "__main__":
-    print("=== どっちよ.com AI自動投稿システム V92 (画像撤去・最安定版) ===")
+    print("=== どっちよ.com AI自動投稿システム V92改 (具体化・3日間制限・自然コメント版) ===")
     
-    # 既存タイトル取得（比較用にクリーンアップ済み）
-    existing_titles = get_all_existing_titles()
+    # 既存タイトル取得（比較用にクリーンアップ済みのリストと、3日以内の生タイトルリストを取得）
+    existing_titles, recent_titles = get_existing_data()
+    recent_texts_combined = " ".join(recent_titles) # 検索しやすいように結合しておく
     
     # ニュース収集
     tier1, tier2, tier3 = get_mega_trends_and_entertainment_news()
@@ -401,6 +425,13 @@ if __name__ == "__main__":
         
         if verdict and verdict.get("score", 0) >= 70:
             print(f"🎉 70点突破！合格。")
+            
+            # ★ 追加: 3日以内のテーマ重複制限
+            core_topic = verdict.get("core_topic", "")
+            if core_topic and len(core_topic) > 1 and core_topic in recent_texts_combined:
+                print(f"   🚫 3日以内の重複テーマ検知（{core_topic}）のためスキップ")
+                continue
+
             article = generate_article_content(news, verdict)
             
             if article:
