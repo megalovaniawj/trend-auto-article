@@ -1,13 +1,13 @@
 name: 1日3回 自動トレンド記事作成
 
 on:
-  schedule:
-    # JSTの 8:00 (UTC 23:00)
-    - cron: '0 23 * * *'
-    # JSTの 12:00 (UTC 03:00)
-    - cron: '0 3 * * *'
-    # JSTの 20:00 (UTC 11:00)
-    - cron: '0 11 * * *'
+schedule:
+    # JSTの 8:07 (UTC 23:07) - 0分の大渋滞を回避
+    - cron: '7 23 * * *'
+    # JSTの 12:07 (UTC 03:07) - 0分の大渋滞を回避
+    - cron: '7 3 * * *'
+    # JSTの 20:07 (UTC 11:07) - 0分の大渋滞を回避
+    - cron: '7 11 * * *'
   workflow_dispatch: # 手動実行用ボタンも有効化
 
 jobs:
