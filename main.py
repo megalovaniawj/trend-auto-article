@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V97】415修正・スレッド返信・関連性強化版
+【トレンド自動記事作成 V98】スレッド返信順序修正版
 修正点:
-1. 415エラー修正: POSTリクエストにContent-Type: application/jsonを明示
-2. スレッド返信実装: >>数字 を検出してparent IDを指定
-3. 返信の関連性強化: プロンプト改善で返信元に関連した内容を生成
+1. 415エラー修正: Content-Type: application/json を明示
+2. スレッド返信: 返信コメントは必ず返信元より後に配置するようプロンプト制約
+3. 返信の関連性強化
 """
 
 import os
 import sys
 import warnings
-import logging
 import requests
 import base64
 import time
@@ -71,7 +70,6 @@ NG_KEYWORDS = [
 # ==========================================
 
 def get_auth_header():
-    """★修正: Content-Typeを明示的に追加（415エラー対策）"""
     creds = f"{WP_USER.strip()}:{WP_APP_PASS.strip()}"
     token = base64.b64encode(creds.encode()).decode()
     return {
@@ -80,7 +78,6 @@ def get_auth_header():
     }
 
 def get_auth_header_get():
-    """GETリクエスト用（Content-Typeなし）"""
     creds = f"{WP_USER.strip()}:{WP_APP_PASS.strip()}"
     token = base64.b64encode(creds.encode()).decode()
     return {'Authorization': f'Basic {token}'}
@@ -235,7 +232,7 @@ def select_best_topics(candidates):
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
+    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
 
     final_selection = []
     try:
@@ -243,7 +240,6 @@ def select_best_topics(candidates):
         if res.status_code == 200:
             text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             selected_keywords = [x.strip() for x in re.split(r'[,\n、]', text) if x.strip()]
-
             for kw in selected_keywords:
                 for item in candidates:
                     if (item['keyword'] in kw) or (kw in item['keyword']):
@@ -268,12 +264,11 @@ def extract_pure_keyword(headline, raw_keyword):
     prompt = f"""
     以下のニュース見出しから、Wikipediaで検索可能な【1つの固有名詞（作品名・人名・サービス名）】を抽出せよ。
     前置きは不要。単語1つのみを出力せよ。
-
     見出し: {headline}
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
+    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
     try:
         res = requests.post(url, headers=headers, json=data, timeout=20)
         if res.status_code == 200:
@@ -345,34 +340,34 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     あなたは凄腕のWeb編集者です。
     トレンドの「文脈」と「事実（Wiki）」を読み解き、一番盛り上がる投票企画を立案してください。
 
-    【★最重要：柔軟な企画レシピ（状況に応じて使い分けろ）】
+    【★最重要：柔軟な企画レシピ】
 
     1. **🎮 ゲームが話題の場合 (ソース: {source_type})**
-       - **WHICH_BEST**: 「好きなNPCは？」「最強の武器は？」「倒せないボスは？」
-       - ※Wikiにリスト（登場人物・武器等）がある場合のみ選択。なければ『好き嫌い（2択）』へ。
+       - **WHICH_BEST**: 「好きなNPCは？」「最強の武器は？」
+       - ※Wikiにリストがある場合のみ。なければ『好き嫌い（2択）』へ。
 
     2. **🎤 歌手・アーティストが話題の場合**
-       - **WHICH_BEST**: 「一番好きな曲は？」「最高傑作のアルバムは？」
-       - ※Wikiにディスコグラフィがある場合のみ選択。
+       - **WHICH_BEST**: 「一番好きな曲は？」
+       - ※Wikiにディスコグラフィがある場合のみ。
 
     3. **⚡ キャラクター・人物が話題の場合**
-       - **パターンA**: ニュースで「必殺技」や「セリフ」が話題なら「かっこいい？微妙？（**LIKE_DISLIKE**）」
-       - **パターンB**: 作品全体の人気投票へ広げる「推しキャラは誰？（**WHICH_BEST**）」
-       - **パターンC**: 単純にそのキャラの好感度「好き？嫌い？（**LIKE_DISLIKE**）」
+       - **パターンA**: 技・セリフが話題なら「かっこいい？微妙？（LIKE_DISLIKE）」
+       - **パターンB**: 作品全体の人気投票「推しキャラは誰？（WHICH_BEST）」
+       - **パターンC**: 好感度「好き？嫌い？（LIKE_DISLIKE）」
 
     4. **🎬 映画・イベントが話題の場合**
-       - **WHICH_BEST**: 「どのシリーズが好き？」「注目選手は？」
+       - **WHICH_BEST**: 「どのシリーズが好き？」
        - **LIKE_DISLIKE**: 「面白かった？つまらなかった？」
 
     【★鉄の掟】
-    - **捏造禁止**: WHICH_BESTの選択肢は、必ずWikiのデータ内にある固有名詞を使うこと。
-    - **4PGP対策**: ソースがゲーム系（4Gamer等）なら、セキュリティソフトと混同せずゲームとして扱え。
+    - 捏造禁止: WHICH_BESTの選択肢は必ずWikiにある固有名詞のみ。
+    - ゲーム系ソースはセキュリティソフトと混同しないこと。
 
     【入力情報】
     KW: {pure_keyword} (ソース: {source_type})
     見出し: {headline}
-    ★トレンド背景: {news_data}
-    ★Wikiデータ: {ai_fact_input}
+    トレンド背景: {news_data}
+    Wikiデータ: {ai_fact_input}
 
     【出力形式(JSON)】
     {{
@@ -385,7 +380,7 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
+    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
     try:
         res = requests.post(url, headers=headers, json=data, timeout=30)
         if res.status_code == 200:
@@ -401,19 +396,21 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     return {"core_keyword": pure_keyword, "article_type": "SKIP", "proposed_title": "", "reason": "", "suggested_category": "contents"}
 
 def get_natural_personas(count):
-    """★修正: 返信の関連性を強化したプロンプト"""
+    """★修正: 返信コメントは必ず返信元より後の番号に配置する制約を追加"""
     return f"""
     以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず {count} 個】生成してください。
 
     【★コメントの鉄則（絶対遵守）】
-    1. 「【選択肢名】」のような機械的な前置きは**絶対に書かない**こと。
+    1. 「【選択肢名】」のような機械的な前置きは絶対に書かない。
     2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。
-    3. 「やっぱこれだわ」「いや、普通に考えてそれはないだろ」「設定的にこっちが正解なんだよな」といった、感情的で生の声を意識すること。
-    4. {count}件のうち2〜3件は >>数字 の形で特定のコメントへの返信を含めること。
-    5. 返信する場合は**必ず返信元のコメント内容を踏まえた関連性のある内容**にすること。
-       - 例: >>2 が「キャラAが最強」と言っていたら、>>3 は「いやキャラAはボス戦では弱いだろ」のように具体的に反応する。
-       - 単なる「わかる」「それな」だけでなく、賛成・反論・補足を明確にすること。
-    6. >>数字 の数字は必ず1から始まる連番（実際に存在するコメント番号）を使うこと。
+    3. 「やっぱこれだわ」「いや普通に考えてそれはない」のような感情的で生の声を意識する。
+    4. {count}件のうち2〜3件は >>数字 の形で返信を含めること。
+    5. 返信する場合は必ず返信元のコメント内容を踏まえた関連性のある内容にすること。
+       賛成・反論・補足を明確にすること。
+    6. ★重要: >>数字 の数字は、必ずそのコメント自身の番号より小さい数字にすること。
+       例: 3番目のコメントが返信する場合は >>1 または >>2 のみ使用可。
+       例: 7番目のコメントが返信する場合は >>1〜>>6 のみ使用可。
+       これにより、返信元が必ず先に投稿済みの状態になります。
     """
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
@@ -440,14 +437,14 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         **【対決型（2択）】**
         - タイトル: 「{title_idea}」
         - 選択肢: 2〜3個（例: 好き/嫌い/普通、アリ/ナシ）
-        - **解説文(text)**: 各選択肢を選ぶ理由を**200〜300文字程度**で熱く語ること。
+        - 解説文(text): 各選択肢を選ぶ理由を200〜300文字程度で熱く語ること。
         """
     elif a_type == "WHICH_BEST":
         type_instruction = f"""
         **【多選択型（推し投票）】**
         - タイトル: 「{title_idea}」
-        - **選択肢のルール**: 絶対にWiki情報にある固有名詞のみ使うこと。5〜10個列挙。「その他」も必須。
-        - **解説文(text)**: その選択肢の魅力や背景を**200〜300文字程度**で深掘り解説すること。
+        - 選択肢のルール: 絶対にWiki情報にある固有名詞のみ使うこと。5〜10個列挙。「その他」も必須。
+        - 解説文(text): その選択肢の魅力や背景を200〜300文字程度で深掘り解説すること。
         """
 
     prompt = f"""
@@ -464,7 +461,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     【コメント生成指示】
     {persona_instruction}
 
-    【★JSON形式（slugは英語小文字とハイフンのみ。数字禁止）】
+    【★JSON形式（slugは英語小文字とハイフンのみ）】
     {{
         "title": "タイトル",
         "slug": "short-english-slug",
@@ -479,14 +476,15 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
             {{ "name": "選択肢2", "text": "濃厚な解説(200文字以上)", "votes": 0 }}
         ],
         "comments": [
-            {{ "name": "匿名", "text": "コメント本文" }},
-            {{ "name": "名無し", "text": ">>1 返信元の内容を踏まえた具体的な反応" }}
+            {{ "name": "匿名", "text": "コメント本文（返信なし）" }},
+            {{ "name": "名無し", "text": "コメント本文（返信なし）" }},
+            {{ "name": "ハンドルネーム", "text": ">>1 返信元の内容を踏まえた具体的な反応" }}
         ]
     }}
     """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS }
+    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
     try:
         res = requests.post(url, headers=headers, json=data, timeout=120)
         if res.status_code != 200: return None
@@ -504,13 +502,13 @@ def get_term_id(slug):
     try:
         res = requests.get(f"{WP_URL}/wp-json/wp/v2/categories?slug={slug}", headers=get_auth_header_get())
         if res.json(): return res.json()[0]['id']
-        res = requests.post(f"{WP_URL}/wp-json/wp/v2/categories", headers=get_auth_header(), json={'name':slug, 'slug':slug})
+        res = requests.post(f"{WP_URL}/wp-json/wp/v2/categories", headers=get_auth_header(), json={'name': slug, 'slug': slug})
         return res.json()['id']
     except: return 1
 
 def post_comments_with_threads(pid, comments, post_time, now):
-    """★新規: スレッド返信対応のコメント投稿関数"""
-    comment_id_map = {}  # {投稿順番号(1始まり): WPコメントID}
+    """★修正: 順番通りに投稿しながらIDを記録。返信元は必ず先に投稿済みになる"""
+    comment_id_map = {}  # {コメント番号(1始まり): WPコメントID}
 
     print(f"💬 コメント投稿中({len(comments)}件)...", end="")
 
@@ -522,6 +520,8 @@ def post_comments_with_threads(pid, comments, post_time, now):
         match = re.search(r'>>(\d+)', text)
         if match:
             ref_num = int(match.group(1))
+            # プロンプトで「返信元は自分より小さい番号」を保証しているので
+            # comment_id_map[ref_num] は必ず存在するはず
             parent_id = comment_id_map.get(ref_num, 0)
 
         c_time = post_time + timedelta(minutes=random.randint(5, 55))
@@ -555,7 +555,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V97: 415修正・スレッド返信・関連性強化) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V98: スレッド返信順序修正版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -693,7 +693,6 @@ else:
                 post_link = res_data.get('link')
                 print(f"✅ 投稿完了 (ID:{pid})")
 
-                # ★新規: スレッド返信対応コメント投稿
                 post_comments_with_threads(pid, data.get('comments', []), post_time, now)
 
                 send_discord_notification(pid, data['title'], post_link)
