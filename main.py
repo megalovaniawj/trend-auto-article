@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V101】gemma-4思考プロセス完全対応版
+【トレンド自動記事作成 V102】プロンプト誘導方式でgemma-4思考プロセス完全排除
 修正点:
-1. extract_pure_keyword: 思考プロセス除去を強化
-2. select_best_topics: 最後の行からキーワードを取得するよう修正
-3. 全機能維持
+1. extract_pure_keyword: プロンプト末尾を「固有名詞:」で終わらせ直接回答を誘導
+2. analyze_and_extract_core: JSON開始を誘導するプロンプトに変更
+3. select_best_topics: 同様に誘導方式に変更
+4. 全機能維持
 """
 
 import os
@@ -65,16 +66,6 @@ NG_KEYWORDS = [
     "ほのぼの", "癒やし", "かわいい", "猫", "犬", "動物園", "水族館", "住吉大社", "ローカル", "地域"
 ]
 
-# 思考プロセス除去用NGワード
-THINKING_NG = [
-    'Input', 'Task', 'Constraint', 'Result', 'Option', 'Output', 'Answer',
-    'Select', 'Wait', 'Let', 'Actually', 'Definitely', 'Likely', 'Proper',
-    'searchable', 'Wikipedia', 'headline', 'proper', 'noun', 'or just',
-    'highly', 'very', 'safe', 'candidate', 'prominent', 'correct',
-    '→', '->', '•', '✓', 'Yes.', 'No.', 'vs', 'either', 'both',
-    'I will', "I'll", "Let's", 'chosen', 'selected', 'picking'
-]
-
 # ==========================================
 # ★ ヘルパー関数
 # ==========================================
@@ -129,45 +120,17 @@ def send_discord_notification(post_id, title, post_url):
     except Exception as e:
         print(f" ⚠️ Discord通知失敗: {e}")
 
-def is_thinking_line(line):
-    """思考プロセスの行かどうかを判定"""
-    for ng in THINKING_NG:
-        if ng.lower() in line.lower():
-            return True
-    # 英語が多い行は思考プロセスの可能性が高い
-    english_chars = len(re.findall(r'[a-zA-Z]', line))
-    total_chars = len(line.replace(' ', ''))
-    if total_chars > 0 and english_chars / total_chars > 0.5 and len(line) > 15:
-        return True
-    # カッコや記号が多い行
-    if re.search(r'\(.*\)', line) and len(line) > 20:
-        return True
-    return False
-
-def extract_clean_keyword(raw_text):
-    """gemma-4の思考プロセス出力から固有名詞を抽出"""
-    lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
-
-    # 後ろから順に固有名詞らしい行を探す
-    for line in reversed(lines):
-        # 記号・マークダウンを除去
-        cleaned = re.sub(r'^[\*\-\#\>\•\d\.\s]+', '', line).strip()
-        cleaned = re.sub(r'[「」『』【】\(\)（）"\'\.\s]', '', cleaned)
-
-        # 空、長すぎ、短すぎはスキップ
-        if not cleaned or len(cleaned) > 25 or len(cleaned) < 1:
-            continue
-
-        # 思考プロセス行はスキップ
-        if is_thinking_line(line):
-            continue
-
-        # 数字のみはスキップ
-        if cleaned.isdigit():
-            continue
-
-        return cleaned
-
+def call_gemini(prompt, timeout=30):
+    """Gemini API共通呼び出し関数"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
+    headers = {'Content-Type': 'application/json'}
+    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
+    try:
+        res = requests.post(url, headers=headers, json=data, timeout=timeout)
+        if res.status_code == 200:
+            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+    except:
+        pass
     return None
 
 # ==========================================
@@ -261,53 +224,32 @@ def select_best_topics(candidates):
     if not candidates: return []
     print("🤔 AI編集長が厳選中...", end="")
 
-    candidates_str = "\n".join([f"- {c['keyword']} ({c['source']}): {c['headline']}" for c in candidates[:80]])
+    candidates_str = "\n".join([f"- {c['keyword']}" for c in candidates[:80]])
 
-    prompt = f"""あなたはWebメディアの編集長です。
-以下のニュースリストから、読者が熱狂的に投票したくなるものを10個選んでください。
+    # ★修正: カンマ区切りリストのみを出力させる誘導プロンプト
+    prompt = f"""以下のニュースキーワードリストから、アニメ・漫画・ゲーム・エンタメ系で読者が投票したくなるものを10個選んでください。
+事件・政治・暗いニュースは除外してください。
 
-優先順位:
-1. アニメ・漫画・ゲームの具体的な新作・キャラ
-2. VTuber・YouTuberの話題
-3. チェーン店グルメ・商品
-4. アイドル・芸能（ゴシップ除く）
-
-除外: 事件、事故、政治、暗いニュース
-
-ニュースリスト:
+キーワードリスト:
 {candidates_str}
 
-選んだ10個のキーワードをカンマ区切りのみで答えてください。
-思考過程は不要です。キーワードのカンマ区切りリストのみ出力してください。"""
+選んだキーワードをカンマ区切りで出力してください:
+"""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
-
+    text = call_gemini(prompt, timeout=30)
     final_selection = []
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=30)
-        if res.status_code == 200:
-            raw_text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            # ★修正: gemma-4の思考プロセスを除去して最後のカンマ区切り行を取る
-            lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
-            kw_line = ""
-            for line in reversed(lines):
-                # カンマが含まれる行 = キーワードリストの可能性が高い
-                if ',' in line or '、' in line:
-                    kw_line = line
-                    break
-            if not kw_line and lines:
-                kw_line = lines[-1]
 
-            selected_keywords = [x.strip() for x in re.split(r'[,\n、]', kw_line) if x.strip()]
-            for kw in selected_keywords:
-                for item in candidates:
-                    if (item['keyword'] in kw) or (kw in item['keyword']):
-                        if item not in final_selection:
-                            final_selection.append(item)
-                        break
-    except: pass
+    if text:
+        # 最後の行を取る（思考プロセス対策）
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        kw_line = lines[-1] if lines else ""
+        selected_keywords = [x.strip() for x in re.split(r'[,、]', kw_line) if x.strip()]
+        for kw in selected_keywords:
+            for item in candidates:
+                if (item['keyword'] in kw) or (kw in item['keyword']):
+                    if item not in final_selection:
+                        final_selection.append(item)
+                    break
 
     if len(final_selection) < ARTICLES_TO_CREATE:
         print(f"    ⚠️ AI選出不足({len(final_selection)}件)。不足分を自動補充します。")
@@ -322,30 +264,27 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print(f"    🧹 見出しから「核KW」を純粋抽出中...", end="")
-    prompt = f"""以下のニュース見出しに含まれる固有名詞を1つ答えてください。
+
+    # ★修正: プロンプト末尾を「答え:」で終わらせて直接回答を誘導
+    prompt = f"""ニュース見出しからWikipediaで検索できる固有名詞（作品名・人名・サービス名）を1つ抜き出してください。
 
 見出し: {headline}
 
-条件:
-- Wikipediaで検索できる作品名・人名・サービス名
-- 1つだけ
-- 固有名詞のみ（説明・理由・思考過程は不要）
+答え:"""
 
-固有名詞:"""
+    text = call_gemini(prompt, timeout=20)
+    if text:
+        # 最初の行だけ取る（誘導プロンプトなので1行目に答えが来るはず）
+        first_line = text.split('\n')[0].strip()
+        # 記号・余計な文字を除去
+        first_line = re.sub(r'^[\*\-\#\>\•\d\.\s「」『』【】（）\(\)"\']+', '', first_line).strip()
+        first_line = re.sub(r'[「」『』【】\(\）（）"\']', '', first_line).strip()
+        # 長すぎる・空・英語ばかりはNG
+        english_ratio = len(re.findall(r'[a-zA-Z]', first_line)) / max(len(first_line), 1)
+        if first_line and len(first_line) <= 20 and not (english_ratio > 0.8 and len(first_line) > 8):
+            print(f" -> [{first_line}]")
+            return first_line
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=20)
-        if res.status_code == 200:
-            raw = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            pure_kw = extract_clean_keyword(raw)
-            if pure_kw:
-                print(f" -> [{pure_kw}]")
-                return pure_kw
-    except Exception as e:
-        print(f" -> 例外: {e}")
     print(" -> 失敗")
     return "EXTRACT_FAILED"
 
@@ -404,60 +343,50 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     print(f"    🧠 AI編集長が企画を考案中...", end="")
     ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "Wiki情報なし"
 
-    prompt = f"""あなたは凄腕のWeb編集者です。以下の情報を読んで、最も盛り上がる投票企画をJSON形式で答えてください。
+    # ★修正: JSONの開始「{」を先に書いて直接JSON出力を誘導
+    prompt = f"""Web編集者として投票企画をJSON形式で立案してください。
 
 テーマ: {pure_keyword}（ソース: {source_type}）
 見出し: {headline}
 トレンド背景: {news_data}
 Wiki情報: {ai_fact_input}
 
-企画タイプの選び方:
+企画タイプ:
+- LIKE_DISLIKE: 好き嫌い・賛否の2〜3択（Wiki情報がない場合は必ずこれ）
+- WHICH_BEST: 推し投票（Wiki情報にリストがある場合のみ）
+- SKIP: 投票企画にできない場合
 
-1. ゲームが話題の場合（ソース: {source_type}）
-   - WHICH_BEST: 「好きなNPCは？」「最強の武器は？」「倒せないボスは？」
-   - Wikiにリスト（登場人物・武器等）がある場合のみ選択。なければLIKE_DISLIKEへ。
-
-2. 歌手・アーティストが話題の場合
-   - WHICH_BEST: 「一番好きな曲は？」「最高傑作のアルバムは？」
-   - Wikiにディスコグラフィがある場合のみ選択。
-
-3. キャラクター・人物が話題の場合
-   - パターンA: 技・セリフが話題なら「かっこいい？微妙？」→ LIKE_DISLIKE
-   - パターンB: 作品全体の人気投票「推しキャラは誰？」→ WHICH_BEST
-   - パターンC: 好感度「好き？嫌い？」→ LIKE_DISLIKE
-
-4. 映画・イベントが話題の場合
-   - WHICH_BEST: 「どのシリーズが好き？」
-   - LIKE_DISLIKE: 「面白かった？つまらなかった？」
-
-鉄の掟:
-- WHICH_BESTの選択肢は必ずWiki情報にある固有名詞のみ使うこと（捏造禁止）
-- ゲーム系ソースはセキュリティソフトと混同しないこと
-- Wiki情報がない場合は必ずLIKE_DISLIKEを選ぶこと
-
-思考過程は不要です。以下のJSON形式のみで答えてください:
+JSON:
 {{
     "core_keyword": "{pure_keyword}",
     "article_type": "LIKE_DISLIKE",
-    "proposed_title": "タイトル",
-    "reason": "理由",
-    "suggested_category": "contents"
-}}"""
+    "proposed_title": """"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=30)
-        if res.status_code == 200:
-            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            text = text.replace('```json', '').replace('```', '').strip()
-            start = text.find('{'); end = text.rfind('}') + 1
-            analysis = json.loads(text[start:end])
+    text = call_gemini(prompt, timeout=30)
+    if text:
+        try:
+            # プロンプトの末尾のJSONと結合してパース
+            full_json = prompt.split("JSON:\n")[1] + text
+            full_json = full_json.replace('```json', '').replace('```', '').strip()
+            start = full_json.find('{')
+            end = full_json.rfind('}') + 1
+            analysis = json.loads(full_json[start:end])
             print(f" -> [{analysis['article_type']}] {analysis['proposed_title']}")
             print(f"      👀 意図: {analysis['reason']}")
             return analysis
-    except: pass
+        except:
+            # パース失敗時はtextからJSONを探す
+            try:
+                text_clean = text.replace('```json', '').replace('```', '').strip()
+                start = text_clean.find('{')
+                end = text_clean.rfind('}') + 1
+                if start != -1 and end > 0:
+                    analysis = json.loads(text_clean[start:end])
+                    print(f" -> [{analysis['article_type']}] {analysis['proposed_title']}")
+                    print(f"      👀 意図: {analysis['reason']}")
+                    return analysis
+            except:
+                pass
     print(" -> 分析失敗")
     return {"core_keyword": pure_keyword, "article_type": "SKIP", "proposed_title": "", "reason": "", "suggested_category": "contents"}
 
@@ -505,7 +434,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     else:
         type_instruction = ""
 
-    prompt = f"""トレンドテーマ「{theme}」について、読者参加型の「投票記事」を作成してください。
+    prompt = f"""トレンドテーマ「{theme}」について、読者参加型の「投票記事」をJSON形式で作成してください。
 
 【前提情報】
 ニュース: {original_headline}
@@ -518,42 +447,33 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 【コメント生成指示】
 {persona_instruction}
 
-思考過程は不要です。以下のJSON形式のみで答えてください（コードブロック不要）:
+JSON:
 {{
-    "title": "タイトル",
-    "slug": "short-english-slug",
-    "tags": ["タグ"],
-    "category_slug": "{cat}",
-    "h2_title": "導入H2見出し",
-    "h2_text": "記事冒頭の導入文（400〜500文字程度）",
-    "fact_h3": "豆知識の見出し",
-    "info_fact": "豆知識の本文（300〜400文字程度）",
-    "items": [
-        {{ "name": "選択肢1", "text": "濃厚な解説(200文字以上)", "votes": 0 }},
-        {{ "name": "選択肢2", "text": "濃厚な解説(200文字以上)", "votes": 0 }}
-    ],
-    "comments": [
-        {{ "name": "匿名", "text": "コメント本文（返信なし）" }},
-        {{ "name": "名無し", "text": "コメント本文（返信なし）" }},
-        {{ "name": "ハンドルネーム", "text": ">>1 返信元の内容を踏まえた具体的な反応" }}
-    ]
-}}"""
+    "title": """"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=120)
-        if res.status_code != 200: return None
-        text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        text = text.replace('```json', '').replace('```', '').strip()
-        start = text.find('{'); end = text.rfind('}') + 1
-        data_json = json.loads(text[start:end])
-        print(f" -> 完了 (コメント{len(data_json.get('comments', []))}件生成)")
-        return data_json
-    except:
-        print(" -> 生成エラー")
-        return None
+    text = call_gemini(prompt, timeout=120)
+    if text:
+        try:
+            full_json = prompt.split("JSON:\n")[1] + text
+            full_json = full_json.replace('```json', '').replace('```', '').strip()
+            start = full_json.find('{')
+            end = full_json.rfind('}') + 1
+            data_json = json.loads(full_json[start:end])
+            print(f" -> 完了 (コメント{len(data_json.get('comments', []))}件生成)")
+            return data_json
+        except:
+            try:
+                text_clean = text.replace('```json', '').replace('```', '').strip()
+                start = text_clean.find('{')
+                end = text_clean.rfind('}') + 1
+                if start != -1 and end > 0:
+                    data_json = json.loads(text_clean[start:end])
+                    print(f" -> 完了 (コメント{len(data_json.get('comments', []))}件生成)")
+                    return data_json
+            except:
+                pass
+    print(" -> 生成エラー")
+    return None
 
 def get_term_id(slug):
     try:
@@ -607,7 +527,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V101: gemma-4思考プロセス完全対応版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V102: プロンプト誘導方式) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
