@@ -262,8 +262,15 @@ def extract_pure_keyword(headline, raw_keyword):
     if text:
         for line in text.split('\n'):
             line = line.strip()
+            # コロンが含まれる場合はコロン以降を取る
+            if ':' in line or ':' in line:
+                line = re.split(r'[:：]', line)[-1].strip()
             line = re.sub(r'^[\*\-\#\>\d\.\s]+', '', line).strip()
-            line = re.sub(r'[\(\)\[\]"\']', '', line).strip()
+            line = re.sub(r'[\(\)\[\]"\'\.]', '', line).strip()
+            # 英語が50%超かつ8文字超はスキップ
+            english_ratio = len(re.findall(r'[a-zA-Z]', line)) / max(len(line), 1)
+            if english_ratio > 0.5 and len(line) > 8:
+                continue
             jp_chars = len(re.findall(r'[\u3040-\u9fff]', line))
             if line and len(line) <= 25 and jp_chars >= 1:
                 print(" -> [" + line + "]")
@@ -340,7 +347,7 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
         "歌手アーティストはWikiにディスコグラフィがあればWHICH_BEST。\n"
         "キャラ人物は好感度をLIKE_DISLIKEか推し投票をWHICH_BEST。\n"
         "WHICH_BESTの選択肢は必ずWiki情報にある固有名詞のみ（捏造禁止）。\n\n"
-        "思考過程不要。JSON形式のみで答えてください:\n"
+        "必ずJSONのみ出力してください。前後に説明文を入れないこと。\n"
         '{"core_keyword": "' + pure_keyword + '", "article_type": "LIKE_DISLIKE", "proposed_title": "タイトル", "reason": "理由", "suggested_category": "contents"}'
     )
 
@@ -352,8 +359,15 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
             print("      👀 意図: " + result.get('reason', ''))
             return result
 
-    print(" -> 分析失敗")
-    return {"core_keyword": pure_keyword, "article_type": "SKIP", "proposed_title": "", "reason": "", "suggested_category": "contents"}
+    # パース失敗時はLIKE_DISLIKEにフォールバック
+    print(" -> 分析失敗（LIKE_DISLIKEにフォールバック）")
+    return {
+        "core_keyword": pure_keyword,
+        "article_type": "LIKE_DISLIKE",
+        "proposed_title": "【" + pure_keyword + "】好き？嫌い？あなたはどっち？",
+        "reason": "フォールバック",
+        "suggested_category": "contents"
+    }
 
 def get_natural_personas(count):
     return (
@@ -407,7 +421,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         + fact_instruction + "\n\n"
         "構成ルール:\n" + type_instruction + "\n\n"
         "コメント生成指示:\n" + persona_instruction + "\n\n"
-        "思考過程不要。JSON形式のみで答えてください:\n"
+        "必ずJSONのみ出力してください。前後に説明文を入れないこと。\n"
         '{"title": "タイトル", "slug": "english-slug", "tags": ["タグ"], "category_slug": "' + cat + '", '
         '"h2_title": "H2見出し", "h2_text": "導入文400〜500文字", '
         '"fact_h3": "豆知識見出し", "info_fact": "豆知識300〜400文字", '
