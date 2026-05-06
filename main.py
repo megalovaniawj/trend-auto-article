@@ -31,7 +31,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
     print("Error: env not set")
     sys.exit(1)
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-2.5-flash-lite"
 ARTICLES_TO_CREATE = 2
 
 SAFETY_SETTINGS = [
