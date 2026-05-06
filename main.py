@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V100】gemma-4思考プロセス対応版
+【トレンド自動記事作成 V101】gemma-4思考プロセス完全対応版
 修正点:
-1. extract_pure_keyword: 最後の行を取るように変更（gemma-4の思考プロセス出力に対応）
-2. 全機能維持
+1. extract_pure_keyword: 思考プロセス除去を強化
+2. select_best_topics: 最後の行からキーワードを取得するよう修正
+3. 全機能維持
 """
 
 import os
@@ -64,6 +65,16 @@ NG_KEYWORDS = [
     "ほのぼの", "癒やし", "かわいい", "猫", "犬", "動物園", "水族館", "住吉大社", "ローカル", "地域"
 ]
 
+# 思考プロセス除去用NGワード
+THINKING_NG = [
+    'Input', 'Task', 'Constraint', 'Result', 'Option', 'Output', 'Answer',
+    'Select', 'Wait', 'Let', 'Actually', 'Definitely', 'Likely', 'Proper',
+    'searchable', 'Wikipedia', 'headline', 'proper', 'noun', 'or just',
+    'highly', 'very', 'safe', 'candidate', 'prominent', 'correct',
+    '→', '->', '•', '✓', 'Yes.', 'No.', 'vs', 'either', 'both',
+    'I will', "I'll", "Let's", 'chosen', 'selected', 'picking'
+]
+
 # ==========================================
 # ★ ヘルパー関数
 # ==========================================
@@ -117,6 +128,47 @@ def send_discord_notification(post_id, title, post_url):
         print(" 🔔 Discord通知送信完了")
     except Exception as e:
         print(f" ⚠️ Discord通知失敗: {e}")
+
+def is_thinking_line(line):
+    """思考プロセスの行かどうかを判定"""
+    for ng in THINKING_NG:
+        if ng.lower() in line.lower():
+            return True
+    # 英語が多い行は思考プロセスの可能性が高い
+    english_chars = len(re.findall(r'[a-zA-Z]', line))
+    total_chars = len(line.replace(' ', ''))
+    if total_chars > 0 and english_chars / total_chars > 0.5 and len(line) > 15:
+        return True
+    # カッコや記号が多い行
+    if re.search(r'\(.*\)', line) and len(line) > 20:
+        return True
+    return False
+
+def extract_clean_keyword(raw_text):
+    """gemma-4の思考プロセス出力から固有名詞を抽出"""
+    lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+
+    # 後ろから順に固有名詞らしい行を探す
+    for line in reversed(lines):
+        # 記号・マークダウンを除去
+        cleaned = re.sub(r'^[\*\-\#\>\•\d\.\s]+', '', line).strip()
+        cleaned = re.sub(r'[「」『』【】\(\)（）"\'\.\s]', '', cleaned)
+
+        # 空、長すぎ、短すぎはスキップ
+        if not cleaned or len(cleaned) > 25 or len(cleaned) < 1:
+            continue
+
+        # 思考プロセス行はスキップ
+        if is_thinking_line(line):
+            continue
+
+        # 数字のみはスキップ
+        if cleaned.isdigit():
+            continue
+
+        return cleaned
+
+    return None
 
 # ==========================================
 # ★ トレンド収集＆分析
@@ -225,7 +277,8 @@ def select_best_topics(candidates):
 ニュースリスト:
 {candidates_str}
 
-選んだ10個のキーワードをカンマ区切りで答えてください。キーワードのみ、説明不要。"""
+選んだ10個のキーワードをカンマ区切りのみで答えてください。
+思考過程は不要です。キーワードのカンマ区切りリストのみ出力してください。"""
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
@@ -235,8 +288,19 @@ def select_best_topics(candidates):
     try:
         res = requests.post(url, headers=headers, json=data, timeout=30)
         if res.status_code == 200:
-            text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            selected_keywords = [x.strip() for x in re.split(r'[,\n、]', text) if x.strip()]
+            raw_text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            # ★修正: gemma-4の思考プロセスを除去して最後のカンマ区切り行を取る
+            lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+            kw_line = ""
+            for line in reversed(lines):
+                # カンマが含まれる行 = キーワードリストの可能性が高い
+                if ',' in line or '、' in line:
+                    kw_line = line
+                    break
+            if not kw_line and lines:
+                kw_line = lines[-1]
+
+            selected_keywords = [x.strip() for x in re.split(r'[,\n、]', kw_line) if x.strip()]
             for kw in selected_keywords:
                 for item in candidates:
                     if (item['keyword'] in kw) or (kw in item['keyword']):
@@ -258,12 +322,16 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print(f"    🧹 見出しから「核KW」を純粋抽出中...", end="")
-    prompt = f"""以下のニュース見出しを読んでください。
+    prompt = f"""以下のニュース見出しに含まれる固有名詞を1つ答えてください。
 
 見出し: {headline}
 
-この見出しに含まれるWikipediaで検索できる固有名詞（作品名・人名・サービス名）を1つだけ答えてください。
-説明不要。固有名詞のみ答えてください。"""
+条件:
+- Wikipediaで検索できる作品名・人名・サービス名
+- 1つだけ
+- 固有名詞のみ（説明・理由・思考過程は不要）
+
+固有名詞:"""
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY.strip()}"
     headers = {'Content-Type': 'application/json'}
@@ -272,26 +340,10 @@ def extract_pure_keyword(headline, raw_keyword):
         res = requests.post(url, headers=headers, json=data, timeout=20)
         if res.status_code == 200:
             raw = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-
-            # ★修正: gemma-4は思考プロセスを出力するので最後の行を取る
-            lines = [l.strip() for l in raw.split('\n') if l.strip()]
-            # 最後の行から順に「短くてシンプルな固有名詞らしい行」を探す
-            pure_kw = ""
-            for line in reversed(lines):
-                # 記号・英数字・スペースのみの短い行をスキップ
-                cleaned = re.sub(r'[「」『』【】"\'\.\s\*\-\#]', '', line)
-                if len(cleaned) >= 1 and len(cleaned) <= 30:
-                    # 明らかに思考プロセスの行を除外
-                    if not any(ng in line for ng in ['Input', 'Task', 'Constraint', 'Result', 'Option', 'Output', 'Answer', 'Select', 'Wait', 'Let', 'Actually', 'Yes.', 'No.', '→', '->','Definitely', 'Likely', 'Proper']):
-                        pure_kw = cleaned
-                        break
-
-            if not pure_kw:
-                print(" -> 失敗（固有名詞が見つからず）")
-                return "EXTRACT_FAILED"
-
-            print(f" -> [{pure_kw}]")
-            return pure_kw
+            pure_kw = extract_clean_keyword(raw)
+            if pure_kw:
+                print(f" -> [{pure_kw}]")
+                return pure_kw
     except Exception as e:
         print(f" -> 例外: {e}")
     print(" -> 失敗")
@@ -383,7 +435,7 @@ Wiki情報: {ai_fact_input}
 - ゲーム系ソースはセキュリティソフトと混同しないこと
 - Wiki情報がない場合は必ずLIKE_DISLIKEを選ぶこと
 
-以下のJSON形式のみで答えてください（説明不要、思考過程不要）:
+思考過程は不要です。以下のJSON形式のみで答えてください:
 {{
     "core_keyword": "{pure_keyword}",
     "article_type": "LIKE_DISLIKE",
@@ -466,7 +518,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 【コメント生成指示】
 {persona_instruction}
 
-以下のJSON形式のみで答えてください（説明不要、思考過程不要、コードブロック不要）:
+思考過程は不要です。以下のJSON形式のみで答えてください（コードブロック不要）:
 {{
     "title": "タイトル",
     "slug": "short-english-slug",
@@ -555,7 +607,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V100: gemma-4思考プロセス対応版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V101: gemma-4思考プロセス完全対応版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
