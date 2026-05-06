@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# V102: gemma-4-31b-it対応版
+# V103: gemini-2.5-flash対応版（リトライ処理追加）
 
 import os
 import sys
@@ -105,22 +105,33 @@ def send_discord_notification(post_id, title, post_url):
     except Exception as e:
         print(" ⚠️ Discord通知失敗: " + str(e))
 
-def call_gemini(prompt, timeout=30):
+def call_gemini(prompt, timeout=60):
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL_NAME + ":generateContent?key=" + GEMINI_API_KEY.strip()
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{"parts": [{"text": prompt}]}],
         "safetySettings": SAFETY_SETTINGS,
-        "generationConfig": {"maxOutputTokens": 4096}
+        "generationConfig": {
+            "maxOutputTokens": 8192,
+            "thinkingConfig": {"thinkingBudget": 0}
+        }
     }
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=timeout)
-        if res.status_code == 200:
-            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        else:
-            print(" [APIエラー:" + str(res.status_code) + "]")
-    except Exception as e:
-        print(" [例外:" + str(e) + "]")
+    for attempt in range(3):
+        try:
+            res = requests.post(url, headers=headers, json=data, timeout=timeout)
+            if res.status_code == 200:
+                return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            elif res.status_code in [429, 503, 500]:
+                wait = (attempt + 1) * 30
+                print(" [" + str(res.status_code) + " リトライ" + str(attempt + 1) + "/3 " + str(wait) + "秒待機]", end="")
+                time.sleep(wait)
+            else:
+                print(" [APIエラー:" + str(res.status_code) + "]")
+                return None
+        except Exception as e:
+            print(" [例外:" + str(e) + "]")
+            if attempt < 2:
+                time.sleep(20)
     return None
 
 def parse_json_from_text(text):
@@ -130,7 +141,6 @@ def parse_json_from_text(text):
         end = text.rfind('}') + 1
         if start != -1 and end > 0:
             candidate = json.loads(text[start:end])
-            # プレースホルダーチェック: titleが日本語でないものは除外
             title = candidate.get('title', '')
             if title in ['タイトル', 'title', '...', '']:
                 return None
@@ -260,8 +270,6 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print("    🧹 見出しから核KWを純粋抽出中...", end="")
-    # ヘッドラインから直接抽出を試みる（AIを使わず正規表現で）
-    # 「」『』の中の文字を優先的に取得
     matches = re.findall(r'[「『](.*?)[」』]', headline)
     for m in matches:
         m = m.strip()
@@ -270,7 +278,6 @@ def extract_pure_keyword(headline, raw_keyword):
             print(" -> [" + m + "] (正規表現)")
             return m
 
-    # AIで抽出
     prompt = "次の見出しに含まれる日本語のアニメ・漫画・ゲーム・人物の固有名詞を1つだけ答えてください。固有名詞のみ、説明不要。\n見出し: " + headline
     text = call_gemini(prompt, timeout=20)
     if text:
@@ -466,7 +473,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
     print(" 完了 (スレッド構造: " + str(len(comment_id_map)) + "件成功)")
 
 # メイン処理
-print("\n🔥 完全自動トレンド記事作成 (V102: gemma-4-31b-it対応版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V103: gemini-2.5-flash対応版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -505,8 +512,8 @@ else:
             analysis_data['proposed_title'] = "【" + analysis_data['core_keyword'] + "】好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
 
-        print("☕ 制限回避のため10秒休憩中...", end="")
-        time.sleep(10)
+        print("☕ 制限回避のため15秒休憩中...", end="")
+        time.sleep(15)
         print(" 再開")
 
         data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
