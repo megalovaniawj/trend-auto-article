@@ -1,4 +1,4 @@
- -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # V102: gemma-4-31b-it対応版
 
 import os
