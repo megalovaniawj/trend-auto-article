@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ -*- coding: utf-8 -*-
 # V102: gemma-4-31b-it対応版
 
 import os
@@ -129,7 +129,12 @@ def parse_json_from_text(text):
         start = text.find('{')
         end = text.rfind('}') + 1
         if start != -1 and end > 0:
-            return json.loads(text[start:end])
+            candidate = json.loads(text[start:end])
+            # プレースホルダーチェック: titleが日本語でないものは除外
+            title = candidate.get('title', '')
+            if title in ['タイトル', 'title', '...', '']:
+                return None
+            return candidate
     except:
         pass
     return None
@@ -255,7 +260,18 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print("    🧹 見出しから核KWを純粋抽出中...", end="")
-    prompt = "見出し「" + headline + "」の作品名・人名を日本語1語で答えよ:"
+    # ヘッドラインから直接抽出を試みる（AIを使わず正規表現で）
+    # 「」『』の中の文字を優先的に取得
+    matches = re.findall(r'[「『](.*?)[」』]', headline)
+    for m in matches:
+        m = m.strip()
+        jp_chars = len(re.findall(r'[\u3040-\u9fff]', m))
+        if m and len(m) <= 20 and jp_chars >= 1:
+            print(" -> [" + m + "] (正規表現)")
+            return m
+
+    # AIで抽出
+    prompt = "次の見出しに含まれる日本語のアニメ・漫画・ゲーム・人物の固有名詞を1つだけ答えてください。固有名詞のみ、説明不要。\n見出し: " + headline
     text = call_gemini(prompt, timeout=20)
     if text:
         for line in text.split('\n'):
@@ -268,9 +284,10 @@ def extract_pure_keyword(headline, raw_keyword):
             if english_ratio > 0.5 and len(line) > 8:
                 continue
             jp_chars = len(re.findall(r'[\u3040-\u9fff]', line))
-            if line and len(line) <= 25 and jp_chars >= 1:
+            if line and len(line) <= 20 and jp_chars >= 1:
                 print(" -> [" + line + "]")
                 return line
+
     print(" -> 失敗")
     return "EXTRACT_FAILED"
 
@@ -314,12 +331,11 @@ def perform_news_research(pure_keyword):
             feed = feedparser.parse(res.content)
             if feed.entries:
                 news_text = ""
+                print(" [調査完了]")
                 for i, entry in enumerate(feed.entries[:3]):
                     title = re.sub(r' [-|–|:|：].*', '', entry.title).strip()
                     news_text += title + "\n"
-                    print(" [調査完了]" if i == 0 else "", end="")
-                    print("\n      👉 記事" + str(i+1) + ": " + title, end="")
-                print()
+                    print("      👉 記事" + str(i+1) + ": " + title)
                 return news_text
     except:
         pass
@@ -331,11 +347,15 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     wiki = fact_check_data[:500] if fact_check_data != "SEARCH_FAILED" else "なし"
 
     prompt = (
-        "テーマ「" + pure_keyword + "」の投票記事企画をJSONで答えよ。\n"
+        "テーマ「" + pure_keyword + "」の投票記事企画を考えてください。\n"
         "Wiki情報がある場合はWHICH_BEST（推しキャラ等）、ない場合はLIKE_DISLIKE。\n"
-        "Wiki:" + wiki + "\n"
-        "JSONのみ出力:\n"
-        '{"core_keyword":"' + pure_keyword + '","article_type":"LIKE_DISLIKE","proposed_title":"タイトル","reason":"理由","suggested_category":"contents"}'
+        "Wiki情報: " + wiki + "\n\n"
+        "以下のキーを持つJSONを出力してください:\n"
+        "- core_keyword: 「" + pure_keyword + "」\n"
+        "- article_type: WHICH_BEST または LIKE_DISLIKE\n"
+        "- proposed_title: 日本語の記事タイトル\n"
+        "- reason: 企画意図\n"
+        "- suggested_category: contents\n"
     )
 
     text = call_gemini(prompt, timeout=45)
@@ -367,32 +387,34 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     wiki = fact_check_data[:800] if fact_check_data != "SEARCH_FAILED" else "なし"
 
     if a_type == "WHICH_BEST":
-        items_rule = "Wiki情報にある固有名詞を5〜8個＋その他1個"
+        items_instruction = "Wiki情報にある登場人物や作品名を5〜8個リストアップして、それぞれ解説を書いてください。必ず「その他」も追加してください。"
     else:
-        items_rule = "好き・嫌い・普通 の3択"
+        items_instruction = "「好き」「嫌い」「普通」の3択を作り、それぞれ150文字程度の解説を書いてください。"
 
     prompt = (
-        "「" + theme + "」の投票記事JSONを日本語で作成せよ。\n"
-        "タイトル:「" + title_idea + "」\n"
-        "選択肢:" + items_rule + "\n"
-        "Wiki:" + wiki[:500] + "\n"
-        "コメント:" + str(comment_count) + "個（掲示板口調、2〜3件は>>数字で返信）\n"
-        "JSONのみ出力:\n"
-        '{"title":"' + title_idea + '","slug":"slug-here","tags":["タグ"],"category_slug":"' + cat + '",'
-        '"h2_title":"見出し","h2_text":"導入200文字",'
-        '"fact_h3":"豆知識","info_fact":"豆知識200文字",'
-        '"items":[{"name":"選択肢1","text":"解説150文字","votes":0},{"name":"選択肢2","text":"解説150文字","votes":0}],'
-        '"comments":[{"name":"名前","text":"コメント"},{"name":"名前2","text":">>1 返信"}]}'
+        "「" + title_idea + "」というタイトルの投票記事を日本語で書いてください。\n\n"
+        "テーマ: " + theme + "\n"
+        "Wiki情報: " + wiki[:600] + "\n\n"
+        "記事の構成:\n"
+        "1. h2_title: 導入の見出し\n"
+        "2. h2_text: 200文字程度の導入文\n"
+        "3. fact_h3: 豆知識の見出し\n"
+        "4. info_fact: 200文字程度の豆知識\n"
+        "5. items: " + items_instruction + "\n"
+        "6. comments: 掲示板風コメントを" + str(comment_count) + "個。2〜3個は>>数字で返信する形式。\n\n"
+        "slugはローマ字またはアルファベット小文字ハイフン区切りで作成してください。\n"
+        "tagsは日本語で3つ。\n\n"
+        "JSONのみ出力してください（説明文不要）:\n"
     )
 
     text = call_gemini(prompt, timeout=120)
     if text:
         result = parse_json_from_text(text)
-        if result:
+        if result and result.get('title', '') not in ['タイトル', '', '...']:
             print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
             return result
         else:
-            print(" -> JSONパース失敗 RAW先頭300: " + text[:300])
+            print(" -> JSONパース失敗 RAW先頭200: " + text[:200])
     else:
         print(" -> API応答なし")
 
