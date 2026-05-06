@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# V103: gemini-2.5-flash対応版（リトライ処理追加）
+# V103: gemini-2.5-flash-lite対応版（items KeyError修正）
 
 import os
 import sys
@@ -418,6 +418,15 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     if text:
         result = parse_json_from_text(text)
         if result and result.get('title', '') not in ['タイトル', '', '...']:
+            # itemsが存在しない場合はデフォルト値を設定
+            if not result.get('items'):
+                result['items'] = [
+                    {"name": "好き", "text": theme + "が好きな理由を教えてください。", "votes": 0},
+                    {"name": "嫌い", "text": theme + "が嫌いな理由を教えてください。", "votes": 0},
+                    {"name": "普通", "text": "どちらでもない派の意見をどうぞ。", "votes": 0}
+                ]
+            if not result.get('comments'):
+                result['comments'] = []
             print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
             return result
         else:
@@ -473,7 +482,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
     print(" 完了 (スレッド構造: " + str(len(comment_id_map)) + "件成功)")
 
 # メイン処理
-print("\n🔥 完全自動トレンド記事作成 (V103: gemini-2.5-flash対応版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V103: gemini-2.5-flash-lite対応版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -544,7 +553,7 @@ else:
         vote_mode = random.choice(['接戦', '圧倒的', '中程度', '僅差'])
         print("   📊 投票演出モード: " + vote_mode)
 
-        for i, item_choice in enumerate(data['items']):
+        for i, item_choice in enumerate(data.get('items', [])):
             idx = i + 1
             if idx > 10:
                 break
@@ -567,11 +576,15 @@ else:
                 votes += random.randint(1, 9)
 
             meta['vote_multi_idx_' + str(i)] = str(votes)
-            if len(data['items']) == 2:
+            if len(data.get('items', [])) == 2:
                 k = 'vote_count_a' if i == 0 else 'vote_count_b'
                 meta[k] = str(votes)
 
             items_str.append(name)
+
+        if not items_str:
+            print(" -> ⚠️ 選択肢なしのためスキップ")
+            continue
 
         cat_id = get_term_id(data.get('category_slug', 'contents'))
 
