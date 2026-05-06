@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V99デバッグ版】gemma-4出力確認用
+【トレンド自動記事作成 V100】gemma-4思考プロセス対応版
+修正点:
+1. extract_pure_keyword: 最後の行を取るように変更（gemma-4の思考プロセス出力に対応）
+2. 全機能維持
 """
 
 import os
@@ -268,12 +271,26 @@ def extract_pure_keyword(headline, raw_keyword):
     try:
         res = requests.post(url, headers=headers, json=data, timeout=20)
         if res.status_code == 200:
-            pure_kw = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            # ★デバッグ: RAW出力を表示
-            print(f"\n      🔍 RAW出力: [{pure_kw}]", end="")
-            pure_kw = re.sub(r'[\r\n].*', '', pure_kw)
-            pure_kw = re.sub(r'[「」『』【】"\'\.\s]', '', pure_kw)
-            print(f" -> クリーン後: [{pure_kw}]")
+            raw = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+
+            # ★修正: gemma-4は思考プロセスを出力するので最後の行を取る
+            lines = [l.strip() for l in raw.split('\n') if l.strip()]
+            # 最後の行から順に「短くてシンプルな固有名詞らしい行」を探す
+            pure_kw = ""
+            for line in reversed(lines):
+                # 記号・英数字・スペースのみの短い行をスキップ
+                cleaned = re.sub(r'[「」『』【】"\'\.\s\*\-\#]', '', line)
+                if len(cleaned) >= 1 and len(cleaned) <= 30:
+                    # 明らかに思考プロセスの行を除外
+                    if not any(ng in line for ng in ['Input', 'Task', 'Constraint', 'Result', 'Option', 'Output', 'Answer', 'Select', 'Wait', 'Let', 'Actually', 'Yes.', 'No.', '→', '->','Definitely', 'Likely', 'Proper']):
+                        pure_kw = cleaned
+                        break
+
+            if not pure_kw:
+                print(" -> 失敗（固有名詞が見つからず）")
+                return "EXTRACT_FAILED"
+
+            print(f" -> [{pure_kw}]")
             return pure_kw
     except Exception as e:
         print(f" -> 例外: {e}")
@@ -366,7 +383,7 @@ Wiki情報: {ai_fact_input}
 - ゲーム系ソースはセキュリティソフトと混同しないこと
 - Wiki情報がない場合は必ずLIKE_DISLIKEを選ぶこと
 
-以下のJSON形式のみで答えてください（説明不要）:
+以下のJSON形式のみで答えてください（説明不要、思考過程不要）:
 {{
     "core_keyword": "{pure_keyword}",
     "article_type": "LIKE_DISLIKE",
@@ -433,6 +450,8 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 タイトル: 「{title_idea}」
 選択肢のルール: 絶対にWiki情報にある固有名詞のみ使うこと。5〜10個列挙。「その他」も必須。
 解説文(text): その選択肢の魅力や背景を200〜300文字程度で深掘り解説すること。"""
+    else:
+        type_instruction = ""
 
     prompt = f"""トレンドテーマ「{theme}」について、読者参加型の「投票記事」を作成してください。
 
@@ -447,7 +466,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 【コメント生成指示】
 {persona_instruction}
 
-【★JSON形式（slugは英語小文字とハイフンのみ）】
+以下のJSON形式のみで答えてください（説明不要、思考過程不要、コードブロック不要）:
 {{
     "title": "タイトル",
     "slug": "short-english-slug",
@@ -536,7 +555,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V99デバッグ版: gemma-4出力確認) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V100: gemma-4思考プロセス対応版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
