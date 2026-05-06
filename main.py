@@ -108,7 +108,11 @@ def send_discord_notification(post_id, title, post_url):
 def call_gemini(prompt, timeout=30):
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL_NAME + ":generateContent?key=" + GEMINI_API_KEY.strip()
     headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}], "safetySettings": SAFETY_SETTINGS}
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "safetySettings": SAFETY_SETTINGS,
+        "generationConfig": {"maxOutputTokens": 4096}
+    }
     try:
         res = requests.post(url, headers=headers, json=data, timeout=timeout)
         if res.status_code == 200:
@@ -126,7 +130,7 @@ def parse_json_from_text(text):
         end = text.rfind('}') + 1
         if start != -1 and end > 0:
             return json.loads(text[start:end])
-    except Exception as e:
+    except:
         pass
     return None
 
@@ -220,11 +224,8 @@ def select_best_topics(candidates):
 
     candidates_str = "\n".join(["- " + c['keyword'] for c in candidates[:80]])
     prompt = (
-        "以下のニュースキーワードリストから、アニメ・漫画・ゲーム・エンタメ系で"
-        "読者が投票したくなるものを10個選んでください。\n"
-        "事件・政治・暗いニュースは除外してください。\n\n"
-        "キーワードリスト:\n" + candidates_str + "\n\n"
-        "選んだキーワードをカンマ区切りで出力してください:\n"
+        "以下からアニメ・漫画・ゲーム・エンタメ系を10個選びカンマ区切りで出力:\n"
+        + candidates_str + "\n出力:"
     )
 
     text = call_gemini(prompt, timeout=30)
@@ -254,12 +255,7 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print("    🧹 見出しから核KWを純粋抽出中...", end="")
-    prompt = (
-        "次のニュース見出しから、作品名・人名・サービス名を1つだけ日本語で答えてください。\n"
-        "日本語の固有名詞のみ。説明不要。\n\n"
-        "見出し: " + headline + "\n\n"
-        "固有名詞:"
-    )
+    prompt = "見出し「" + headline + "」の作品名・人名を日本語1語で答えよ:"
     text = call_gemini(prompt, timeout=20)
     if text:
         for line in text.split('\n'):
@@ -304,7 +300,7 @@ def perform_fact_check(pure_keyword):
             print(" [テキストなし]")
             return "SEARCH_FAILED"
         print(" [取得完了]")
-        return "【「" + pure_keyword + "」に関するWikipediaの事実データ】\n" + extract[:4000]
+        return extract[:1500]
     except:
         print(" [APIエラー]")
         return "SEARCH_FAILED"
@@ -317,36 +313,32 @@ def perform_news_research(pure_keyword):
         if res.status_code == 200:
             feed = feedparser.parse(res.content)
             if feed.entries:
-                news_text = "【「" + pure_keyword + "」の最新ニュース】\n"
-                print(" [調査完了]")
+                news_text = ""
                 for i, entry in enumerate(feed.entries[:3]):
                     title = re.sub(r' [-|–|:|：].*', '', entry.title).strip()
-                    news_text += "・" + title + "\n"
-                    print("      👉 記事" + str(i+1) + ": " + title)
+                    news_text += title + "\n"
+                    print(" [調査完了]" if i == 0 else "", end="")
+                    print("\n      👉 記事" + str(i+1) + ": " + title, end="")
+                print()
                 return news_text
     except:
         pass
     print(" [ニュースなし]")
-    return "（直近のニュースは見つかりませんでした）"
+    return ""
 
 def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data, source_type):
     print("    🧠 AI編集長が企画を考案中...", end="")
-    ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "Wiki情報なし"
+    wiki = fact_check_data[:500] if fact_check_data != "SEARCH_FAILED" else "なし"
 
     prompt = (
-        "Web編集者として投票企画をJSON形式で立案してください。\n\n"
-        "テーマ: " + pure_keyword + " ソース: " + source_type + "\n"
-        "見出し: " + headline + "\n"
-        "トレンド背景: " + news_data + "\n"
-        "Wiki情報: " + ai_fact_input + "\n\n"
-        "企画タイプ:\n"
-        "- LIKE_DISLIKE: 好き嫌い賛否の2〜3択（Wiki情報がない場合は必ずこれ）\n"
-        "- WHICH_BEST: 推し投票（Wiki情報にリストがある場合のみ）\n\n"
-        "必ずJSONのみ出力してください。前後に説明文を入れないこと。\n"
-        '{"core_keyword": "' + pure_keyword + '", "article_type": "LIKE_DISLIKE", "proposed_title": "タイトル", "reason": "理由", "suggested_category": "contents"}'
+        "テーマ「" + pure_keyword + "」の投票記事企画をJSONで答えよ。\n"
+        "Wiki情報がある場合はWHICH_BEST（推しキャラ等）、ない場合はLIKE_DISLIKE。\n"
+        "Wiki:" + wiki + "\n"
+        "JSONのみ出力:\n"
+        '{"core_keyword":"' + pure_keyword + '","article_type":"LIKE_DISLIKE","proposed_title":"タイトル","reason":"理由","suggested_category":"contents"}'
     )
 
-    text = call_gemini(prompt, timeout=30)
+    text = call_gemini(prompt, timeout=45)
     if text:
         result = parse_json_from_text(text)
         if result and 'article_type' in result:
@@ -354,7 +346,7 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
             print("      👀 意図: " + result.get('reason', ''))
             return result
 
-    print(" -> 分析失敗（LIKE_DISLIKEにフォールバック）")
+    print(" -> フォールバック")
     return {
         "core_keyword": pure_keyword,
         "article_type": "LIKE_DISLIKE",
@@ -362,19 +354,6 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
         "reason": "フォールバック",
         "suggested_category": "contents"
     }
-
-def get_natural_personas(count):
-    return (
-        "以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず" + str(count) + "個】生成してください。\n\n"
-        "コメントの鉄則:\n"
-        "1. 機械的な前置きは書かない。\n"
-        "2. 説明口調は避ける。\n"
-        "3. 感情的で生の声を意識する。\n"
-        "4. " + str(count) + "件のうち2〜3件は >>数字 の形で返信を含める。\n"
-        "5. 返信する場合は返信元の内容を踏まえた関連性のある内容にする。\n"
-        "6. >>数字 の数字は必ずそのコメント自身の番号より小さい数字にする。\n"
-        "   例: 3番目のコメントが返信する場合は >>1 または >>2 のみ使用可。"
-    )
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
     theme = analysis_data['core_keyword']
@@ -384,55 +363,36 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     print("🤖 記事執筆中 (" + theme + ")...", end="")
 
-    target_comment_count = random.randint(10, 20)
-    persona_instruction = get_natural_personas(target_comment_count)
+    comment_count = random.randint(10, 15)
+    wiki = fact_check_data[:800] if fact_check_data != "SEARCH_FAILED" else "なし"
 
-    fact_instruction = ""
-    if fact_check_data != "SEARCH_FAILED" and fact_check_data != "NO_SEARCH_MODULE":
-        fact_instruction = "\nWiki情報（ここから選択肢を作れ）:\n" + fact_check_data[:2000]
-
-    if a_type == "LIKE_DISLIKE":
-        type_instruction = (
-            "対決型（2〜3択）\n"
-            "タイトル: 「" + title_idea + "」\n"
-            "選択肢: 好き/嫌い/普通 など\n"
-            "解説文(text): 200〜300文字程度"
-        )
-    elif a_type == "WHICH_BEST":
-        type_instruction = (
-            "多選択型（推し投票）\n"
-            "タイトル: 「" + title_idea + "」\n"
-            "選択肢: Wiki情報にある固有名詞のみ。5〜10個＋その他必須。\n"
-            "解説文(text): 200〜300文字程度"
-        )
+    if a_type == "WHICH_BEST":
+        items_rule = "Wiki情報にある固有名詞を5〜8個＋その他1個"
     else:
-        type_instruction = ""
+        items_rule = "好き・嫌い・普通 の3択"
 
     prompt = (
-        "トレンドテーマ「" + theme + "」について読者参加型の投票記事をJSON形式で作成してください。\n\n"
-        "ニュース: " + original_headline + "\n"
-        "背景: " + news_data[:500]
-        + fact_instruction + "\n\n"
-        "構成ルール:\n" + type_instruction + "\n\n"
-        "コメント生成指示:\n" + persona_instruction + "\n\n"
-        "必ずJSONのみ出力してください。前後に説明文を入れないこと。\n"
-        '{"title": "タイトル", "slug": "english-slug", "tags": ["タグ"], "category_slug": "' + cat + '", '
-        '"h2_title": "H2見出し", "h2_text": "導入文400文字程度", '
-        '"fact_h3": "豆知識見出し", "info_fact": "豆知識300文字程度", '
-        '"items": [{"name": "選択肢1", "text": "解説200文字以上", "votes": 0}, {"name": "選択肢2", "text": "解説200文字以上", "votes": 0}], '
-        '"comments": [{"name": "匿名", "text": "コメント"}, {"name": "名無し", "text": ">>1 返信"}]}'
+        "「" + theme + "」の投票記事JSONを日本語で作成せよ。\n"
+        "タイトル:「" + title_idea + "」\n"
+        "選択肢:" + items_rule + "\n"
+        "Wiki:" + wiki[:500] + "\n"
+        "コメント:" + str(comment_count) + "個（掲示板口調、2〜3件は>>数字で返信）\n"
+        "JSONのみ出力:\n"
+        '{"title":"' + title_idea + '","slug":"slug-here","tags":["タグ"],"category_slug":"' + cat + '",'
+        '"h2_title":"見出し","h2_text":"導入200文字",'
+        '"fact_h3":"豆知識","info_fact":"豆知識200文字",'
+        '"items":[{"name":"選択肢1","text":"解説150文字","votes":0},{"name":"選択肢2","text":"解説150文字","votes":0}],'
+        '"comments":[{"name":"名前","text":"コメント"},{"name":"名前2","text":">>1 返信"}]}'
     )
 
     text = call_gemini(prompt, timeout=120)
     if text:
         result = parse_json_from_text(text)
         if result:
-            print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件生成)")
+            print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
             return result
         else:
-            # デバッグ: RAW出力の先頭500文字を表示
-            print(" -> JSONパース失敗")
-            print("  [RAW先頭500文字]: " + text[:500])
+            print(" -> JSONパース失敗 RAW先頭300: " + text[:300])
     else:
         print(" -> API応答なし")
 
@@ -519,7 +479,6 @@ else:
         analysis_data = analyze_and_extract_core(core_kw, item['headline'], fact_check_data, news_data, source_type)
 
         if analysis_data['article_type'] == "WHICH_BEST" and fact_check_data == "SEARCH_FAILED":
-            print(" -> ⚠️情報不足: 好き嫌い形式に変更します。")
             analysis_data['article_type'] = "LIKE_DISLIKE"
             analysis_data['proposed_title'] = "【" + analysis_data['core_keyword'] + "】好き？普通？苦手？"
             analysis_data['suggested_category'] = "people"
@@ -533,7 +492,6 @@ else:
             continue
 
         if analysis_data['article_type'] == "WHICH_BEST" and len(data.get('items', [])) < 2:
-            print(" -> ⚠️選択肢生成失敗: 好き嫌いに差し替えます。")
             analysis_data['article_type'] = "LIKE_DISLIKE"
             data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
             if not data:
