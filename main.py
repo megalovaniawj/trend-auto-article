@@ -40,7 +40,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
     print("❌ エラー: 環境変数（シークレット）が設定されていません。")
     sys.exit(1)
 
-MODEL_NAME = "gemma-4-27b-it"
+MODEL_NAME = "gemma-4-31b-it"
 ARTICLES_TO_CREATE = 2
 
 SAFETY_SETTINGS = [
