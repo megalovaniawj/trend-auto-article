@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-【トレンド自動記事作成 V99】gemma-4-31b-it対応版
-修正点:
-1. MODEL_NAME を gemma-4-31b-it に変更
-2. 全プロンプトをgemma-4向けにシンプル化（指示文をそのまま返す問題を修正）
-3. analyze_and_extract_core のプロンプトを元の詳細版に戻す
-4. 機能は全て維持
+【トレンド自動記事作成 V99デバッグ版】gemma-4出力確認用
 """
 
 import os
@@ -260,7 +255,6 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print(f"    🧹 見出しから「核KW」を純粋抽出中...", end="")
-
     prompt = f"""以下のニュース見出しを読んでください。
 
 見出し: {headline}
@@ -275,15 +269,15 @@ def extract_pure_keyword(headline, raw_keyword):
         res = requests.post(url, headers=headers, json=data, timeout=20)
         if res.status_code == 200:
             pure_kw = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            # ★デバッグ: RAW出力を表示
+            print(f"\n      🔍 RAW出力: [{pure_kw}]", end="")
             pure_kw = re.sub(r'[\r\n].*', '', pure_kw)
             pure_kw = re.sub(r'[「」『』【】"\'\.\s]', '', pure_kw)
-            if len(pure_kw) > 30 or pure_kw.startswith('*') or 'Input' in pure_kw or 'Task' in pure_kw:
-                print(" -> 失敗（異常な出力）")
-                return "EXTRACT_FAILED"
-            print(f" -> [{pure_kw}]")
+            print(f" -> クリーン後: [{pure_kw}]")
             return pure_kw
-    except: pass
-    print(" -> 失敗（元のキーワードを使用）")
+    except Exception as e:
+        print(f" -> 例外: {e}")
+    print(" -> 失敗")
     return "EXTRACT_FAILED"
 
 def perform_fact_check(pure_keyword):
@@ -399,17 +393,18 @@ Wiki情報: {ai_fact_input}
     return {"core_keyword": pure_keyword, "article_type": "SKIP", "proposed_title": "", "reason": "", "suggested_category": "contents"}
 
 def get_natural_personas(count):
-    return f"""以下のネットユーザーになりきって、掲示板のような自然なコメントを{count}個生成してください。
+    return f"""以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず{count}個】生成してください。
 
-ルール:
-1. 「【選択肢名】」のような機械的な前置きは書かない
-2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける
-3. 「やっぱこれだわ」「いや普通に考えてそれはない」のような感情的で生の声にする
-4. {count}件のうち2〜3件は >>数字 の形で返信を含める
-5. 返信する場合は返信元のコメント内容を踏まえた関連性のある内容にする（賛成・反論・補足を明確に）
-6. >>数字 の数字は、必ずそのコメント自身の番号より小さい数字にする
-   例: 3番目のコメントが返信する場合は >>1 または >>2 のみ使用可
-   例: 7番目のコメントが返信する場合は >>1〜>>6 のみ使用可"""
+【★コメントの鉄則（絶対遵守）】
+1. 「【選択肢名】」のような機械的な前置きは絶対に書かない。
+2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。
+3. 「やっぱこれだわ」「いや普通に考えてそれはない」のような感情的で生の声を意識する。
+4. {count}件のうち2〜3件は >>数字 の形で返信を含めること。
+5. 返信する場合は必ず返信元のコメント内容を踏まえた関連性のある内容にすること。
+   賛成・反論・補足を明確にすること。
+6. ★重要: >>数字 の数字は、必ずそのコメント自身の番号より小さい数字にすること。
+   例: 3番目のコメントが返信する場合は >>1 または >>2 のみ使用可。
+   例: 7番目のコメントが返信する場合は >>1〜>>6 のみ使用可。"""
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
     theme = analysis_data['core_keyword']
@@ -424,47 +419,52 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     fact_instruction = ""
     if fact_check_data != "SEARCH_FAILED" and fact_check_data != "NO_SEARCH_MODULE":
-        fact_instruction = f"\nWiki情報（選択肢はここから作る）:\n{fact_check_data}"
+        fact_instruction = f"""
+【Wiki情報（ここから選択肢を作れ）】
+{fact_check_data}"""
 
     if a_type == "LIKE_DISLIKE":
-        type_instruction = f"""投票タイプ: 対決型（2〜3択）
-タイトル案: {title_idea}
-選択肢: 好き/嫌い/普通、アリ/ナシ など
-各選択肢の解説(text): 200〜300文字程度"""
-    else:
-        type_instruction = f"""投票タイプ: 多選択型（推し投票）
-タイトル案: {title_idea}
-選択肢: Wiki情報にある固有名詞のみ使用。5〜10個＋「その他」必須
-各選択肢の解説(text): 200〜300文字程度"""
+        type_instruction = f"""【対決型（2択）】
+タイトル: 「{title_idea}」
+選択肢: 2〜3個（例: 好き/嫌い/普通、アリ/ナシ）
+解説文(text): 各選択肢を選ぶ理由を200〜300文字程度で熱く語ること。"""
+    elif a_type == "WHICH_BEST":
+        type_instruction = f"""【多選択型（推し投票）】
+タイトル: 「{title_idea}」
+選択肢のルール: 絶対にWiki情報にある固有名詞のみ使うこと。5〜10個列挙。「その他」も必須。
+解説文(text): その選択肢の魅力や背景を200〜300文字程度で深掘り解説すること。"""
 
-    prompt = f"""あなたは「どっちよ.com」の編集者です。以下の情報を元に投票記事をJSON形式で作成してください。
+    prompt = f"""トレンドテーマ「{theme}」について、読者参加型の「投票記事」を作成してください。
 
-テーマ: {theme}
+【前提情報】
 ニュース: {original_headline}
-背景: {news_data}{fact_instruction}
+背景: {news_data}
+{fact_instruction}
 
+【★構成ルール】
 {type_instruction}
 
-コメント生成:
+【コメント生成指示】
 {persona_instruction}
 
-以下のJSON形式のみで答えてください（説明不要、コードブロック不要）:
+【★JSON形式（slugは英語小文字とハイフンのみ）】
 {{
     "title": "タイトル",
-    "slug": "english-slug-only",
-    "tags": ["タグ1", "タグ2"],
+    "slug": "short-english-slug",
+    "tags": ["タグ"],
     "category_slug": "{cat}",
     "h2_title": "導入H2見出し",
-    "h2_text": "導入文400〜500文字",
-    "fact_h3": "豆知識見出し",
-    "info_fact": "豆知識300〜400文字",
+    "h2_text": "記事冒頭の導入文（400〜500文字程度）",
+    "fact_h3": "豆知識の見出し",
+    "info_fact": "豆知識の本文（300〜400文字程度）",
     "items": [
-        {{"name": "選択肢1", "text": "解説200文字以上", "votes": 0}},
-        {{"name": "選択肢2", "text": "解説200文字以上", "votes": 0}}
+        {{ "name": "選択肢1", "text": "濃厚な解説(200文字以上)", "votes": 0 }},
+        {{ "name": "選択肢2", "text": "濃厚な解説(200文字以上)", "votes": 0 }}
     ],
     "comments": [
-        {{"name": "匿名", "text": "コメント本文"}},
-        {{"name": "名無し", "text": ">>1 返信内容"}}
+        {{ "name": "匿名", "text": "コメント本文（返信なし）" }},
+        {{ "name": "名無し", "text": "コメント本文（返信なし）" }},
+        {{ "name": "ハンドルネーム", "text": ">>1 返信元の内容を踏まえた具体的な反応" }}
     ]
 }}"""
 
@@ -536,7 +536,7 @@ def post_comments_with_threads(pid, comments, post_time, now):
 # ==========================================
 # メイン処理
 # ==========================================
-print("\n🔥 完全自動トレンド記事作成 (V99: gemma-4-31b-it対応版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V99デバッグ版: gemma-4出力確認) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
