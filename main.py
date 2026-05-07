@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# V104: gemini-2.5-flash-lite対応版（V98プロンプト移植版）
+# V105: gemini-2.5-flash-lite対応版（返信なし・名前ランダム・タイトル改善）
 
 import os
 import sys
@@ -54,6 +54,16 @@ NG_KEYWORDS = [
     "遅延", "運転見合わせ", "人身事故", "停電", "天気", "気象", "雨", "訃報", "お別れ",
     "揶揄", "失言", "処分", "厳罰", "炎上", "謝罪", "不倫", "浮気", "供述",
     "ほのぼの", "癒やし", "かわいい", "猫", "犬", "動物園", "水族館", "住吉大社", "ローカル", "地域"
+]
+
+# ランダム名前リスト（V98準拠）
+COMMENT_NAMES = [
+    "名無しさん", "774", "通りすがり", "ひみつ", "名無し", "774さん",
+    "あああ", "うーん", "そうだな", "わからん", "まじか", "え、マジ？",
+    "それな", "わかる", "確かに", "えっ", "なるほど", "草", "ほんこれ",
+    "同意", "異議あり", "気になる", "たしかに", "でも", "いや待って",
+    "オタク歴15年", "にわかですが", "ファン歴長い", "最近ハマった",
+    "リアタイ勢", "アニメ専門", "原作派", "アニメ派", "両方好き",
 ]
 
 def get_auth_header():
@@ -277,7 +287,6 @@ def select_best_topics(candidates):
 
 def extract_pure_keyword(headline, raw_keyword):
     print("    🧹 見出しから核KWを純粋抽出中...", end="")
-    # 正規表現で「」『』から優先抽出
     matches = re.findall(r'[「『](.*?)[」』]', headline)
     for m in matches:
         m = m.strip()
@@ -422,19 +431,16 @@ def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data,
     }
 
 def get_natural_personas(count):
+    # 返信なし版：シンプルにコメント生成のみ指示
     return (
         "以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず " + str(count) + " 個】生成してください。\n\n"
         "【★コメントの鉄則（絶対遵守）】\n"
         "1. 「【選択肢名】」のような機械的な前置きは絶対に書かない。\n"
         "2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。\n"
         "3. 「やっぱこれだわ」「いや普通に考えてそれはないだろ」のような感情的で生の声を意識する。\n"
-        "4. " + str(count) + "件のうち2〜3件は >>数字 の形で特定のコメントへの返信を含めること。\n"
-        "5. 返信する場合は必ず返信元のコメント内容を踏まえた関連性のある内容にすること。\n"
-        "   賛成・反論・補足を明確にすること。\n"
-        "6. ★重要: >>数字 の数字は、必ずそのコメント自身の番号より小さい数字にすること。\n"
-        "   例: 3番目のコメントが返信する場合は >>1 または >>2 のみ使用可。\n"
-        "   例: 7番目のコメントが返信する場合は >>1〜>>6 のみ使用可。\n"
-        "   これにより、返信元が必ず先に投稿済みの状態になります。\n"
+        "4. 返信（>>数字）は一切使わない。全て独立したコメントにすること。\n"
+        "5. nameフィールドには実際のニックネームを入れること（「匿名」「名無し」「ハンドルネーム」は禁止）。\n"
+        "   例: 「たろう」「アニオタ太郎」「774」「通りすがり」「それな勢」「にわかですが」など。\n"
     )
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
@@ -454,7 +460,7 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     if a_type == "LIKE_DISLIKE":
         type_instruction = (
-            "【対決型（2択）】\n"
+            "【対決型（2〜3択）】\n"
             "- タイトル: 「" + title_idea + "」\n"
             "- 選択肢: 2〜3個（例: 好き/嫌い/普通、アリ/ナシ）\n"
             "- 解説文(text): 各選択肢を選ぶ理由を200〜300文字程度で熱く語ること。"
@@ -492,9 +498,8 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         "        {\"name\": \"選択肢2\", \"text\": \"濃厚な解説(200文字以上)\", \"votes\": 0}\n"
         "    ],\n"
         "    \"comments\": [\n"
-        "        {\"name\": \"匿名\", \"text\": \"コメント本文（返信なし）\"},\n"
-        "        {\"name\": \"名無し\", \"text\": \"コメント本文（返信なし）\"},\n"
-        "        {\"name\": \"ハンドルネーム\", \"text\": \">>1 返信元の内容を踏まえた具体的な反応\"}\n"
+        "        {\"name\": \"たろう\", \"text\": \"コメント本文\"},\n"
+        "        {\"name\": \"アニオタ太郎\", \"text\": \"コメント本文\"}\n"
         "    ]\n"
         "}\n\n"
         "JSONのみ出力してください（説明文不要、コードブロック不要）:"
@@ -504,7 +509,6 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     if text:
         result = parse_json_from_text(text)
         if result and result.get('title', '') not in ['タイトル', '', '...']:
-            # itemsが存在しない場合はデフォルト値を設定
             if not result.get('items'):
                 result['items'] = [
                     {"name": "好き", "text": theme + "が好きな理由を教えてください。", "votes": 0},
@@ -513,6 +517,11 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
                 ]
             if not result.get('comments'):
                 result['comments'] = []
+            # コメントの名前をランダム名前リストで上書き（AIが「匿名」等を使った場合の保険）
+            for com in result['comments']:
+                bad_names = ['匿名', '名無し', 'ハンドルネーム', '名前', 'name', '774さん']
+                if com.get('name', '') in bad_names or not com.get('name', '').strip():
+                    com['name'] = random.choice(COMMENT_NAMES)
             print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
             return result
         else:
@@ -532,43 +541,33 @@ def get_term_id(slug):
     except:
         return 1
 
-def post_comments_with_threads(pid, comments, post_time, now):
-    comment_id_map = {}
+def post_comments(pid, comments, post_time, now):
+    # 返信なし版：全コメントをparent=0でフラットに投稿
     print("💬 コメント投稿中(" + str(len(comments)) + "件)...", end="")
-
+    success = 0
     for i, com in enumerate(comments):
-        text = com['text']
-        parent_id = 0
-        match = re.search(r'>>(\d+)', text)
-        if match:
-            ref_num = int(match.group(1))
-            parent_id = comment_id_map.get(ref_num, 0)
-
         c_time = post_time + timedelta(minutes=random.randint(5, 55))
         if c_time > now:
             c_time = now
-
         try:
             payload = {
                 'post': pid,
                 'author_name': com['name'],
-                'content': text,
+                'content': com['text'],
                 'status': 'approve',
                 'date': c_time.strftime('%Y-%m-%dT%H:%M:%S'),
-                'parent': parent_id
+                'parent': 0
             }
             res = requests.post(WP_URL + "/wp-json/wp/v2/comments", headers=get_auth_header(), json=payload, timeout=10)
             if res.status_code == 201:
-                wp_id = res.json()['id']
-                comment_id_map[i + 1] = wp_id
+                success += 1
         except:
             pass
         time.sleep(0.3)
-
-    print(" 完了 (スレッド構造: " + str(len(comment_id_map)) + "件成功)")
+    print(" 完了 (" + str(success) + "件成功)")
 
 # メイン処理
-print("\n🔥 完全自動トレンド記事作成 (V104: gemini-2.5-flash-lite / V98プロンプト移植版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V105: 返信なし・名前ランダム・タイトル改善版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -703,7 +702,7 @@ else:
                 pid = res_data['id']
                 post_link = res_data.get('link')
                 print("✅ 投稿完了 (ID:" + str(pid) + ")")
-                post_comments_with_threads(pid, data.get('comments', []), post_time, now)
+                post_comments(pid, data.get('comments', []), post_time, now)
                 send_discord_notification(pid, data['title'], post_link)
                 success_count += 1
                 existing_titles.append(clean_title(data['title']))
