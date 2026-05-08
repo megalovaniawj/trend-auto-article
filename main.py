@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# V105: gemini-2.5-flash-lite対応版（返信なし・名前ランダム・タイトル改善）
+# V106: 企画立案プロンプト改善版（フォールバック削減）
 
 import os
 import sys
@@ -50,20 +50,19 @@ NG_KEYWORDS = [
     "痛み", "激痛", "苦しい", "吐き気", "下痢", "発熱", "高熱", "脳梗塞", "心筋梗塞", "死亡", "死去", "遺体",
     "殺人", "殺害", "刺さ", "死刑", "逮捕", "容疑者", "書類送検", "捜査", "警察", "犯人",
     "事故", "火災", "火事", "爆発", "地震", "津波", "災害", "襲撃", "強盗", "不審者",
-    "被害", "告発", "辞任", "解雇", "契約解除", "裁判", "訴訟", "判決", "賠償", "横領", "脱税",
+    "被害", "告発", "辞任", "解雇", "契約解除", "裁判", "訴訟", "判決", "賠償", "横列", "脱税",
     "遅延", "運転見合わせ", "人身事故", "停電", "天気", "気象", "雨", "訃報", "お別れ",
     "揶揄", "失言", "処分", "厳罰", "炎上", "謝罪", "不倫", "浮気", "供述",
     "ほのぼの", "癒やし", "かわいい", "猫", "犬", "動物園", "水族館", "住吉大社", "ローカル", "地域"
 ]
 
-# ランダム名前リスト（V98準拠）
 COMMENT_NAMES = [
-    "名無しさん", "774", "通りすがり", "ひみつ", "名無し", "774さん",
-    "あああ", "うーん", "そうだな", "わからん", "まじか", "え、マジ？",
-    "それな", "わかる", "確かに", "えっ", "なるほど", "草", "ほんこれ",
-    "同意", "異議あり", "気になる", "たしかに", "でも", "いや待って",
+    "名無しさん", "774", "通りすがり", "ひみつ", "あああ", "うーん", "そうだな",
+    "わからん", "まじか", "それな", "わかる", "確かに", "えっ", "なるほど", "草",
+    "ほんこれ", "同意", "気になる", "たしかに", "でも", "いや待って",
     "オタク歴15年", "にわかですが", "ファン歴長い", "最近ハマった",
     "リアタイ勢", "アニメ専門", "原作派", "アニメ派", "両方好き",
+    "たろう", "はなこ", "ゆうき", "さくら", "けんじ", "あきら", "まさし",
 ]
 
 def get_auth_header():
@@ -247,17 +246,10 @@ def select_best_topics(candidates):
         return []
     print("🤔 AI編集長が厳選中...", end="")
 
-    candidates_str = "\n".join(["- " + c['keyword'] + " (" + c['source'] + "): " + c['headline'] for c in candidates[:80]])
+    candidates_str = "\n".join(["- " + c['keyword'] + ": " + c['headline'] for c in candidates[:80]])
     prompt = (
-        "以下のニュースリストから、読者が熱狂的に投票したくなるものを10個選んでください。\n\n"
-        "優先順位:\n"
-        "1. アニメ・漫画・ゲームの具体的な新作・キャラ\n"
-        "2. VTuber・YouTuberの話題\n"
-        "3. チェーン店グルメ・商品\n"
-        "4. アイドル・芸能（ゴシップ除く）\n\n"
-        "除外: 事件、事故、政治、暗いニュース\n\n"
-        "ニュースリスト:\n" + candidates_str + "\n\n"
-        "選んだ10個のキーワードをカンマ区切りで答えてください。キーワードのみ、説明不要。"
+        "以下からアニメ・漫画・ゲーム・エンタメ系を10個選びカンマ区切りで出力。キーワードのみ:\n"
+        + candidates_str + "\n出力:"
     )
 
     text = call_gemini(prompt, timeout=30)
@@ -295,12 +287,7 @@ def extract_pure_keyword(headline, raw_keyword):
             print(" -> [" + m + "] (正規表現)")
             return m
 
-    prompt = (
-        "以下のニュース見出しを読んでください。\n\n"
-        "見出し: " + headline + "\n\n"
-        "この見出しに含まれるWikipediaで検索できる固有名詞（作品名・人名・サービス名）を1つだけ答えてください。\n"
-        "説明不要。固有名詞のみ答えてください。"
-    )
+    prompt = "見出しから固有名詞（作品名・人名）を1つだけ答えてください。説明不要。\n見出し: " + headline
     text = call_gemini(prompt, timeout=20)
     if text:
         for line in text.split('\n'):
@@ -309,7 +296,7 @@ def extract_pure_keyword(headline, raw_keyword):
                 line = re.split(r'[:：]', line)[-1].strip()
             line = re.sub(r'^[\*\-\#\>\d\.\s]+', '', line).strip()
             line = re.sub(r'[\(\)\[\]"\'\.]', '', line).strip()
-            if len(line) > 30 or line.startswith('*') or 'Input' in line or 'Task' in line:
+            if len(line) > 30:
                 continue
             english_ratio = len(re.findall(r'[a-zA-Z]', line)) / max(len(line), 1)
             if english_ratio > 0.5 and len(line) > 8:
@@ -347,9 +334,8 @@ def perform_fact_check(pure_keyword):
         if not extract:
             print(" [テキストなし]")
             return "SEARCH_FAILED"
-        fact_text = "【「" + pure_keyword + "」に関するWikipediaの事実データ】\n" + extract[:4000]
         print(" [取得完了]")
-        return fact_text
+        return extract[:4000]
     except:
         print(" [APIエラー]")
         return "SEARCH_FAILED"
@@ -362,7 +348,7 @@ def perform_news_research(pure_keyword):
         if res.status_code == 200:
             feed = feedparser.parse(res.content)
             if feed.entries:
-                news_text = "【「" + pure_keyword + "」の最新ニュース（トレンド背景）】\n"
+                news_text = ""
                 print(" [調査完了]")
                 for i, entry in enumerate(feed.entries[:3]):
                     title = re.sub(r' [-|–|:|：].*', '', entry.title).strip()
@@ -372,75 +358,73 @@ def perform_news_research(pure_keyword):
     except:
         pass
     print(" [ニュースなし]")
-    return "（直近のニュースは見つかりませんでした）"
+    return ""
+
+def detect_article_type_from_wiki(pure_keyword, wiki_text):
+    """WikiテキストからWHICH_BESTが適切か自動判定"""
+    if wiki_text == "SEARCH_FAILED":
+        return "LIKE_DISLIKE"
+    # 登場人物・キャラクター・楽曲・作品リストが含まれるか確認
+    which_best_signals = ["登場人物", "キャラクター", "シングル", "アルバム", "ディスコグラフィ", "楽曲", "作品一覧", "シリーズ"]
+    for signal in which_best_signals:
+        if signal in wiki_text:
+            return "WHICH_BEST"
+    return "LIKE_DISLIKE"
 
 def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data, source_type):
     print("    🧠 AI編集長が企画を考案中...", end="")
-    ai_fact_input = fact_check_data if fact_check_data != "SEARCH_FAILED" else "Wiki情報なし"
+
+    # まずコードで記事タイプを自動判定
+    auto_type = detect_article_type_from_wiki(pure_keyword, fact_check_data)
+
+    wiki_short = ""
+    if fact_check_data != "SEARCH_FAILED":
+        wiki_short = fact_check_data[:600]
 
     prompt = (
-        "あなたは凄腕のWeb編集者です。\n"
-        "トレンドの「文脈」と「事実（Wiki）」を読み解き、一番盛り上がる投票企画を立案してください。\n\n"
-        "【★最重要：柔軟な企画レシピ（状況に応じて使い分けろ）】\n\n"
-        "1. ゲームが話題の場合 (ソース: " + source_type + ")\n"
-        "   - WHICH_BEST: 「好きなNPCは？」「最強の武器は？」「倒せないボスは？」\n"
-        "   - ※Wikiにリスト（登場人物・武器等）がある場合のみ選択。なければLIKE_DISLIKEへ。\n\n"
-        "2. 歌手・アーティストが話題の場合\n"
-        "   - WHICH_BEST: 「一番好きな曲は？」「最高傑作のアルバムは？」\n"
-        "   - ※Wikiにディスコグラフィがある場合のみ選択。\n\n"
-        "3. キャラクター・人物が話題の場合\n"
-        "   - パターンA: 技・セリフが話題なら「かっこいい？微妙？（LIKE_DISLIKE）」\n"
-        "   - パターンB: 作品全体の人気投票「推しキャラは誰？（WHICH_BEST）」\n"
-        "   - パターンC: 好感度「好き？嫌い？（LIKE_DISLIKE）」\n\n"
-        "4. 映画・イベントが話題の場合\n"
-        "   - WHICH_BEST: 「どのシリーズが好き？」\n"
-        "   - LIKE_DISLIKE: 「面白かった？つまらなかった？」\n\n"
-        "【★鉄の掟】\n"
-        "- 捏造禁止: WHICH_BESTの選択肢は必ずWiki情報にある固有名詞のみ使うこと。\n"
-        "- ゲーム系ソースはセキュリティソフトと混同しないこと。\n\n"
-        "【入力情報】\n"
-        "KW: " + pure_keyword + " (ソース: " + source_type + ")\n"
-        "見出し: " + headline + "\n"
-        "トレンド背景: " + news_data + "\n"
-        "Wikiデータ: " + ai_fact_input + "\n\n"
-        "以下のJSON形式のみで答えてください（説明不要）:\n"
-        "{\n"
-        "    \"core_keyword\": \"" + pure_keyword + "\",\n"
-        "    \"article_type\": \"LIKE_DISLIKE\" or \"WHICH_BEST\" or \"SKIP\",\n"
-        "    \"proposed_title\": \"一番盛り上がるタイトル\",\n"
-        "    \"reason\": \"企画の意図\",\n"
-        "    \"suggested_category\": \"contents\" または \"people\"\n"
-        "}"
+        "テーマ「" + pure_keyword + "」の投票記事を企画してください。\n"
+        "記事タイプ: " + auto_type + "\n"
+        "Wiki情報: " + wiki_short + "\n\n"
+        "JSONのみ出力:\n"
+        "{\"core_keyword\":\"" + pure_keyword + "\","
+        "\"article_type\":\"" + auto_type + "\","
+        "\"proposed_title\":\"魅力的な日本語タイトル\","
+        "\"reason\":\"企画意図\","
+        "\"suggested_category\":\"contents\"}"
     )
 
     text = call_gemini(prompt, timeout=45)
     if text:
         result = parse_json_from_text(text)
-        if result and 'article_type' in result:
-            print(" -> [" + result['article_type'] + "] " + result.get('proposed_title', ''))
+        if result and result.get('proposed_title') and result['proposed_title'] not in ['魅力的な日本語タイトル', 'タイトル', '']:
+            print(" -> [" + result.get('article_type', auto_type) + "] " + result.get('proposed_title', ''))
             print("      👀 意図: " + result.get('reason', ''))
             return result
 
+    # フォールバック：コード判定で自動生成
     print(" -> フォールバック")
+    if auto_type == "WHICH_BEST":
+        title = "【" + pure_keyword + "】推しキャラ・推し要素は？みんなの人気投票！"
+    else:
+        title = "【" + pure_keyword + "】好き？嫌い？あなたはどっち？"
+
     return {
         "core_keyword": pure_keyword,
-        "article_type": "LIKE_DISLIKE",
-        "proposed_title": "【" + pure_keyword + "】好き？嫌い？あなたはどっち？",
-        "reason": "フォールバック",
+        "article_type": auto_type,
+        "proposed_title": title,
+        "reason": "自動判定",
         "suggested_category": "contents"
     }
 
 def get_natural_personas(count):
-    # 返信なし版：シンプルにコメント生成のみ指示
     return (
-        "以下のネットユーザーになりきって、掲示板のような自然なコメントを【必ず " + str(count) + " 個】生成してください。\n\n"
-        "【★コメントの鉄則（絶対遵守）】\n"
-        "1. 「【選択肢名】」のような機械的な前置きは絶対に書かない。\n"
+        "掲示板のような自然なコメントを【必ず " + str(count) + " 個】生成してください。\n\n"
+        "【鉄則】\n"
+        "1. 「【選択肢名】」のような機械的な前置きは書かない。\n"
         "2. 「〇〇に一票」「私は△△を選びます」のような説明口調は避ける。\n"
-        "3. 「やっぱこれだわ」「いや普通に考えてそれはないだろ」のような感情的で生の声を意識する。\n"
-        "4. 返信（>>数字）は一切使わない。全て独立したコメントにすること。\n"
-        "5. nameフィールドには実際のニックネームを入れること（「匿名」「名無し」「ハンドルネーム」は禁止）。\n"
-        "   例: 「たろう」「アニオタ太郎」「774」「通りすがり」「それな勢」「にわかですが」など。\n"
+        "3. 感情的で生の声を意識する。\n"
+        "4. 返信（>>数字）は一切使わない。全て独立したコメント。\n"
+        "5. nameには実際のニックネームを入れる（「匿名」「名無し」「ハンドルネーム」禁止）。\n"
     )
 
 def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
@@ -454,55 +438,41 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
     target_comment_count = random.randint(10, 20)
     persona_instruction = get_natural_personas(target_comment_count)
 
-    fact_instruction = ""
+    wiki = ""
     if fact_check_data != "SEARCH_FAILED":
-        fact_instruction = "\n【Wiki情報（ここから選択肢を作れ）】\n" + fact_check_data
+        wiki = fact_check_data[:800]
 
     if a_type == "LIKE_DISLIKE":
         type_instruction = (
-            "【対決型（2〜3択）】\n"
-            "- タイトル: 「" + title_idea + "」\n"
-            "- 選択肢: 2〜3個（例: 好き/嫌い/普通、アリ/ナシ）\n"
-            "- 解説文(text): 各選択肢を選ぶ理由を200〜300文字程度で熱く語ること。"
+            "選択肢: 2〜3個（好き/嫌い/普通 など）\n"
+            "各選択肢のtext: 200〜300文字の熱い解説"
         )
     else:
         type_instruction = (
-            "【多選択型（推し投票）】\n"
-            "- タイトル: 「" + title_idea + "」\n"
-            "- 選択肢のルール: 絶対にWiki情報にある固有名詞のみ使うこと。5〜10個列挙。「その他」も必須。\n"
-            "- 解説文(text): その選択肢の魅力や背景を200〜300文字程度で深掘り解説すること。"
+            "選択肢: Wiki情報にある固有名詞のみ5〜10個＋「その他」\n"
+            "各選択肢のtext: 200〜300文字の深掘り解説"
         )
 
     prompt = (
-        "トレンドテーマ「" + theme + "」について、読者参加型の「投票記事」を作成してください。\n\n"
-        "【前提情報】\n"
+        "「" + title_idea + "」の投票記事を日本語で書いてください。\n\n"
+        "テーマ: " + theme + "\n"
         "ニュース: " + original_headline + "\n"
-        "背景: " + news_data + "\n"
-        + fact_instruction + "\n\n"
-        "【★構成ルール】\n"
+        "Wiki: " + wiki + "\n\n"
         + type_instruction + "\n\n"
-        "【コメント生成指示】\n"
         + persona_instruction + "\n\n"
-        "【★JSON形式（slugは英語小文字とハイフンのみ）】\n"
+        "JSONのみ出力（説明文・コードブロック不要）:\n"
         "{\n"
-        "    \"title\": \"タイトル\",\n"
-        "    \"slug\": \"short-english-slug\",\n"
-        "    \"tags\": [\"タグ1\", \"タグ2\", \"タグ3\"],\n"
-        "    \"category_slug\": \"" + cat + "\",\n"
-        "    \"h2_title\": \"導入H2見出し\",\n"
-        "    \"h2_text\": \"記事冒頭の導入文（400〜500文字程度）\",\n"
-        "    \"fact_h3\": \"豆知識の見出し\",\n"
-        "    \"info_fact\": \"豆知識の本文（300〜400文字程度）\",\n"
-        "    \"items\": [\n"
-        "        {\"name\": \"選択肢1\", \"text\": \"濃厚な解説(200文字以上)\", \"votes\": 0},\n"
-        "        {\"name\": \"選択肢2\", \"text\": \"濃厚な解説(200文字以上)\", \"votes\": 0}\n"
-        "    ],\n"
-        "    \"comments\": [\n"
-        "        {\"name\": \"たろう\", \"text\": \"コメント本文\"},\n"
-        "        {\"name\": \"アニオタ太郎\", \"text\": \"コメント本文\"}\n"
-        "    ]\n"
-        "}\n\n"
-        "JSONのみ出力してください（説明文不要、コードブロック不要）:"
+        "\"title\":\"" + title_idea + "\",\n"
+        "\"slug\":\"英語スラッグ\",\n"
+        "\"tags\":[\"タグ1\",\"タグ2\",\"タグ3\"],\n"
+        "\"category_slug\":\"" + cat + "\",\n"
+        "\"h2_title\":\"導入見出し\",\n"
+        "\"h2_text\":\"400〜500文字の導入文\",\n"
+        "\"fact_h3\":\"豆知識見出し\",\n"
+        "\"info_fact\":\"300〜400文字の豆知識\",\n"
+        "\"items\":[{\"name\":\"選択肢\",\"text\":\"200文字以上の解説\",\"votes\":0}],\n"
+        "\"comments\":[{\"name\":\"ニックネーム\",\"text\":\"コメント\"}]\n"
+        "}"
     )
 
     text = call_gemini(prompt, timeout=120)
@@ -511,15 +481,15 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
         if result and result.get('title', '') not in ['タイトル', '', '...']:
             if not result.get('items'):
                 result['items'] = [
-                    {"name": "好き", "text": theme + "が好きな理由を教えてください。", "votes": 0},
-                    {"name": "嫌い", "text": theme + "が嫌いな理由を教えてください。", "votes": 0},
+                    {"name": "好き", "text": theme + "の魅力について語ってください。", "votes": 0},
+                    {"name": "嫌い", "text": theme + "が苦手な理由について語ってください。", "votes": 0},
                     {"name": "普通", "text": "どちらでもない派の意見をどうぞ。", "votes": 0}
                 ]
             if not result.get('comments'):
                 result['comments'] = []
-            # コメントの名前をランダム名前リストで上書き（AIが「匿名」等を使った場合の保険）
+            # 名前の保険
             for com in result['comments']:
-                bad_names = ['匿名', '名無し', 'ハンドルネーム', '名前', 'name', '774さん']
+                bad_names = ['匿名', '名無し', 'ハンドルネーム', '名前', 'name', 'ニックネーム']
                 if com.get('name', '') in bad_names or not com.get('name', '').strip():
                     com['name'] = random.choice(COMMENT_NAMES)
             print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
@@ -542,7 +512,6 @@ def get_term_id(slug):
         return 1
 
 def post_comments(pid, comments, post_time, now):
-    # 返信なし版：全コメントをparent=0でフラットに投稿
     print("💬 コメント投稿中(" + str(len(comments)) + "件)...", end="")
     success = 0
     for i, com in enumerate(comments):
@@ -567,7 +536,7 @@ def post_comments(pid, comments, post_time, now):
     print(" 完了 (" + str(success) + "件成功)")
 
 # メイン処理
-print("\n🔥 完全自動トレンド記事作成 (V105: 返信なし・名前ランダム・タイトル改善版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V106: 企画立案改善版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -600,10 +569,6 @@ else:
         news_data = perform_news_research(core_kw)
         source_type = item.get('source', '不明')
         analysis_data = analyze_and_extract_core(core_kw, item['headline'], fact_check_data, news_data, source_type)
-
-        if analysis_data['article_type'] == "SKIP":
-            print(" -> ⚠️ 投票化が難しいためスキップします。")
-            continue
 
         if analysis_data['article_type'] == "WHICH_BEST" and fact_check_data == "SEARCH_FAILED":
             analysis_data['article_type'] = "LIKE_DISLIKE"
