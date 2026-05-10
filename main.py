@@ -1,5 +1,5 @@
- # -*- coding: utf-8 -*-
-# V107: ニュース種類自動判定＋選択肢入りタイトル版
+# -*- coding: utf-8 -*-
+# V108: 選択肢カテゴリー統一・ゲームタイトル対応・自然な選択肢生成版
 
 import os
 import sys
@@ -168,50 +168,91 @@ def detect_news_type(headline, news_data):
         return "ranking"
     return "general"
 
-def build_final_title(core_kw, a_type, items_str, news_type):
-    """選択肢＋ニュース種類を踏まえた最終タイトルを生成"""
+def detect_article_type_from_wiki(pure_keyword, wiki_text):
+    """WikiテキストからWHICH_BESTが適切か自動判定"""
+    if wiki_text == "SEARCH_FAILED":
+        return "LIKE_DISLIKE"
+    # キャラ・メンバー・楽曲・ゲームタイトルのリストがある場合
+    which_best_signals = [
+        "登場人物", "キャラクター", "メンバー",
+        "シングル", "アルバム", "ディスコグラフィ", "楽曲一覧",
+        "作品一覧", "シリーズ作品", "ゲームタイトル",
+        "歴代作品", "シリーズ一覧"
+    ]
+    for signal in which_best_signals:
+        if signal in wiki_text:
+            return "WHICH_BEST"
+    return "LIKE_DISLIKE"
+
+def detect_items_category(pure_keyword, wiki_text, a_type):
+    """選択肢のカテゴリーを判定（何を選択肢にすべきか）"""
+    if a_type == "LIKE_DISLIKE":
+        return "like_dislike"
+    if wiki_text == "SEARCH_FAILED":
+        return "general"
+
+    # 優先順位順に判定
+    if any(kw in wiki_text for kw in ["登場人物", "キャラクター"]):
+        return "character"  # キャラ名
+    if any(kw in wiki_text for kw in ["メンバー", "メンバー一覧"]):
+        return "member"  # アイドル・グループメンバー名
+    if any(kw in wiki_text for kw in ["シングル一覧", "楽曲一覧", "ディスコグラフィ"]):
+        return "song"  # 楽曲名
+    if any(kw in wiki_text for kw in ["作品一覧", "シリーズ作品", "ゲームタイトル", "歴代作品", "シリーズ一覧"]):
+        return "title"  # 作品・ゲームタイトル
+    if any(kw in wiki_text for kw in ["アルバム"]):
+        return "album"  # アルバム名
+    return "general"
+
+def build_final_title(core_kw, a_type, items_str, news_type, items_category):
+    """選択肢＋ニュース種類＋カテゴリーを踏まえた最終タイトルを生成"""
     items5 = "・".join(items_str[:5]) if items_str else ""
     items3 = "・".join(items_str[:3]) if items_str else ""
 
+    # カテゴリー別の表現
+    category_word = {
+        "character": "キャラ",
+        "member": "メンバー",
+        "song": "楽曲",
+        "title": "作品",
+        "album": "アルバム",
+        "general": "推し",
+    }.get(items_category, "推し")
+
     if a_type == "WHICH_BEST":
-        # ニュース種類別パターン
         if news_type == "anime" and items5:
             patterns = [
-                "【" + core_kw + "】アニメ化記念！" + items5 + " 推しキャラ人気投票",
-                "【" + core_kw + "】アニメ化で注目！" + items5 + " 好きなキャラは？",
-                "【" + core_kw + "】アニメ放送記念 推しキャラ人気投票｜" + items5,
+                "【" + core_kw + "】アニメ化記念！" + items5 + " 推し" + category_word + "人気投票",
+                "【" + core_kw + "】アニメ化で注目！好きな" + category_word + "は？｜" + items5,
+                "【" + core_kw + "】アニメ放送記念 " + category_word + "人気投票｜" + items5,
             ]
         elif news_type == "streaming" and items5:
             patterns = [
-                "【" + core_kw + "】配信記念！" + items5 + " 推しキャラ投票",
-                "【" + core_kw + "】配信スタート記念 好きなキャラランキング｜" + items5,
-                "【" + core_kw + "】" + items5 + " 配信で改めて推しを決めよう",
+                "【" + core_kw + "】配信記念！" + items5 + " 推し" + category_word + "投票",
+                "【" + core_kw + "】配信スタート記念 好きな" + category_word + "は？｜" + items5,
             ]
         elif news_type == "sequel" and items5:
             patterns = [
-                "【" + core_kw + "】続編記念！" + items5 + " 推しキャラ人気投票",
-                "【" + core_kw + "】続編決定！好きなキャラは？｜" + items5,
-                "【" + core_kw + "】" + items5 + " 続編前に推しを確認しよう",
+                "【" + core_kw + "】続編記念！" + items5 + " " + category_word + "人気投票",
+                "【" + core_kw + "】続編決定！好きな" + category_word + "は？｜" + items5,
             ]
         elif news_type == "anniversary" and items5:
             patterns = [
-                "【" + core_kw + "】周年記念！" + items5 + " 推しキャラ人気投票",
+                "【" + core_kw + "】周年記念！" + items5 + " " + category_word + "人気投票",
                 "【" + core_kw + "】" + items5 + " 周年記念で推しを語ろう",
             ]
         elif items5:
             patterns = [
-                "【" + core_kw + "】" + items5 + " 推しキャラ人気投票！",
-                "【" + core_kw + "】好きなキャラランキング｜" + items5,
+                "【" + core_kw + "】" + items5 + " 推し" + category_word + "人気投票！",
+                "【" + core_kw + "】好きな" + category_word + "ランキング｜" + items5,
                 "【" + core_kw + "】" + items5 + " どれが一番人気？",
-                "【" + core_kw + "】キャラ人気ランキング！推しは誰？",
+                "【" + core_kw + "】" + category_word + "人気ランキング！推しは誰？",
                 "【" + core_kw + "】" + items5 + " ファン投票結果",
-                "【" + core_kw + "】推しキャラ人気投票｜ファンの総意はこれだ",
             ]
         else:
             patterns = [
-                "【" + core_kw + "】キャラ人気ランキング！推しは誰？",
-                "【" + core_kw + "】推しキャラ人気投票｜ファンの総意",
-                "【" + core_kw + "】好きなキャラランキング、異論は認める",
+                "【" + core_kw + "】" + category_word + "人気ランキング！推しは？",
+                "【" + core_kw + "】推し" + category_word + "人気投票｜ファンの総意",
             ]
     else:
         # LIKE_DISLIKE
@@ -455,15 +496,6 @@ def perform_news_research(pure_keyword):
     print(" [ニュースなし]")
     return ""
 
-def detect_article_type_from_wiki(pure_keyword, wiki_text):
-    if wiki_text == "SEARCH_FAILED":
-        return "LIKE_DISLIKE"
-    which_best_signals = ["登場人物", "キャラクター", "シングル", "アルバム", "ディスコグラフィ", "楽曲", "作品一覧", "シリーズ"]
-    for signal in which_best_signals:
-        if signal in wiki_text:
-            return "WHICH_BEST"
-    return "LIKE_DISLIKE"
-
 def analyze_and_extract_core(pure_keyword, headline, fact_check_data, news_data, source_type):
     print("    🧠 AI編集長が企画を考案中...", end="")
 
@@ -510,7 +542,7 @@ def get_natural_personas(count):
         "5. nameフィールドは何でもよい。\n"
     )
 
-def generate_article_content(analysis_data, original_headline, fact_check_data, news_data):
+def generate_article_content(analysis_data, original_headline, fact_check_data, news_data, items_category):
     theme = analysis_data['core_keyword']
     a_type = analysis_data['article_type']
     title_idea = analysis_data['proposed_title']
@@ -523,23 +555,29 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     wiki = fact_check_data[:800] if fact_check_data != "SEARCH_FAILED" else ""
 
+    # カテゴリー別の選択肢指示
+    category_instructions = {
+        "character": "選択肢: 登場キャラクター名のみ5〜10個＋「その他」。キャラ名以外（声優名・楽曲名等）は絶対に入れない。",
+        "member": "選択肢: グループメンバー名のみ5〜10個＋「その他」。楽曲名・関係者名等は絶対に入れない。",
+        "song": "選択肢: 楽曲タイトルのみ5〜10個＋「その他」。アルバム名・メンバー名等は絶対に入れない。",
+        "title": "選択肢: 作品タイトル・ゲームタイトルのみ5〜10個＋「その他」。キャラ名・楽曲名等は絶対に入れない。",
+        "album": "選択肢: アルバムタイトルのみ5〜10個＋「その他」。楽曲名・メンバー名等は絶対に入れない。",
+        "like_dislike": "選択肢: 「好き」「嫌い」「普通」の3択。",
+        "general": "選択肢: テーマに最も自然な選択肢を5〜10個。同じカテゴリーのものだけで揃えること。",
+    }
+    items_instruction = category_instructions.get(items_category, category_instructions["general"])
+
     if a_type == "LIKE_DISLIKE":
-        type_instruction = (
-            "選択肢: 2〜3個（好き/嫌い/普通 など）\n"
-            "各選択肢のtext: 200〜300文字の熱い解説"
-        )
-    else:
-        type_instruction = (
-            "選択肢: Wiki情報にある固有名詞のみ5〜10個＋「その他」\n"
-            "各選択肢のtext: 200〜300文字の深掘り解説"
-        )
+        items_instruction = category_instructions["like_dislike"]
 
     prompt = (
         "「" + title_idea + "」の投票記事を日本語で書いてください。\n\n"
         "テーマ: " + theme + "\n"
         "ニュース: " + original_headline + "\n"
         "Wiki: " + wiki + "\n\n"
-        + type_instruction + "\n\n"
+        "【選択肢ルール（厳守）】\n"
+        + items_instruction + "\n"
+        "各選択肢のtext: 200〜300文字の解説\n\n"
         + persona_instruction + "\n\n"
         "JSONのみ出力（説明文・コードブロック不要）:\n"
         "{\n"
@@ -568,7 +606,6 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
                 ]
             if not result.get('comments'):
                 result['comments'] = []
-            # 名前を全て匿名に統一
             for com in result['comments']:
                 com['name'] = '匿名'
             print(" -> 完了 (コメント" + str(len(result.get('comments', []))) + "件)")
@@ -615,7 +652,7 @@ def post_comments(pid, comments, post_time, now):
     print(" 完了 (" + str(success) + "件成功)")
 
 # メイン処理
-print("\n🔥 完全自動トレンド記事作成 (V107: ニュース種類自動判定＋選択肢入りタイトル版) 開始...")
+print("\n🔥 完全自動トレンド記事作成 (V108: 選択肢カテゴリー統一版) 開始...")
 
 success_count = 0
 processed_core_keywords = set()
@@ -649,25 +686,28 @@ else:
         source_type = item.get('source', '不明')
         analysis_data = analyze_and_extract_core(core_kw, item['headline'], fact_check_data, news_data, source_type)
 
-        # ニュース種類を判定して保存
+        # ニュース種類と選択肢カテゴリーを判定
         news_type = detect_news_type(item['headline'], news_data)
-        print("    📰 ニュース種類: " + news_type)
+        items_category = detect_items_category(core_kw, fact_check_data, analysis_data['article_type'])
+        print("    📰 ニュース種類: " + news_type + " / 選択肢カテゴリー: " + items_category)
 
         if analysis_data['article_type'] == "WHICH_BEST" and fact_check_data == "SEARCH_FAILED":
             analysis_data['article_type'] = "LIKE_DISLIKE"
+            items_category = "like_dislike"
             analysis_data['suggested_category'] = "people"
 
         print("☕ 制限回避のため15秒休憩中...", end="")
         time.sleep(15)
         print(" 再開")
 
-        data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
+        data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
         if not data:
             continue
 
         if analysis_data['article_type'] == "WHICH_BEST" and len(data.get('items', [])) < 2:
             analysis_data['article_type'] = "LIKE_DISLIKE"
-            data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data)
+            items_category = "like_dislike"
+            data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
             if not data:
                 continue
 
@@ -683,7 +723,7 @@ else:
         # AIに人気順を推測させる
         items_list = data.get('items', [])
         popularity_order = list(range(len(items_list)))
-        if items_list:
+        if items_list and len(items_list) > 1:
             names_str = ", ".join([it['name'] for it in items_list])
             pop_prompt = (
                 "以下の選択肢を人気が高い順に並べてください。番号のみカンマ区切りで答えてください（0始まり）。\n"
@@ -738,8 +778,8 @@ else:
             print(" -> ⚠️ 選択肢なしのためスキップ")
             continue
 
-        # 選択肢＋ニュース種類でタイトルを最終確定
-        final_title = build_final_title(core_kw, analysis_data['article_type'], items_str, news_type)
+        # 選択肢＋ニュース種類＋カテゴリーでタイトルを最終確定
+        final_title = build_final_title(core_kw, analysis_data['article_type'], items_str, news_type, items_category)
         data['title'] = final_title
         print("📌 最終タイトル確定: " + final_title)
 
