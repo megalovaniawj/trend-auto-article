@@ -32,7 +32,7 @@ if not WP_APP_PASS or not GEMINI_API_KEY:
     sys.exit(1)
 
 MODEL_NAME = "gemini-2.5-flash-lite"
-ARTICLES_TO_CREATE = 2
+ARTICLES_TO_CREATE = 3
 
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -617,6 +617,67 @@ def generate_article_content(analysis_data, original_headline, fact_check_data, 
 
     return None
 
+
+def generate_news_article_content(headline, core_kw, news_data, fact_check_data):
+    """ニュース内容に寄せた投票記事を生成"""
+    print("📰 ニュース形式記事執筆中 (" + core_kw + ")...", end="")
+
+    target_comment_count = random.randint(8, 15)
+    wiki = fact_check_data[:600] if fact_check_data != "SEARCH_FAILED" else ""
+
+    prompt = (
+        "以下のニュースを元に、読者が投票したくなる記事を日本語で書いてください。\n\n"
+        "ニュース見出し: " + headline + "\n"
+        "関連情報: " + news_data + "\n"
+        "背景知識: " + wiki + "\n\n"
+        "【記事の方針】\n"
+        "- タイトル: ニュースの出来事そのものを投票テーマにする。\n"
+        "  例: 「○○のアニメ化、期待してる？がっかり？」「△△のDLC、買う価値ある？ない？」\n"
+        "- h2_title/h2_text: ニュースの内容を詳しくまとめた導入文（500文字程度）\n"
+        "- fact_h3/info_fact: このニュースに関連した豆知識や背景情報（300文字程度）\n"
+        "- 選択肢: ニュースの内容に沿った自然な2〜3択\n"
+        "  例: 「期待してる」「がっかり」「どちらでもない」\n"
+        "  例: 「買う」「買わない」「様子見」\n"
+        "  例: 「最高だった」「微妙だった」「まだ見てない」\n"
+        "- 各選択肢のtext: 200〜300文字の解説\n"
+        "- comments: 掲示板風コメントを" + str(target_comment_count) + "個（感情的で生の声）\n\n"
+        "JSONのみ出力（説明文・コードブロック不要）:\n"
+        "{\n"
+        "\"title\":\"ニュースの出来事に沿った魅力的なタイトル\",\n"
+        "\"slug\":\"英語スラッグ\",\n"
+        "\"tags\":[\"タグ1\",\"タグ2\",\"タグ3\"],\n"
+        "\"category_slug\":\"contents\",\n"
+        "\"h2_title\":\"導入見出し\",\n"
+        "\"h2_text\":\"ニュース内容をまとめた500文字程度の導入文\",\n"
+        "\"fact_h3\":\"豆知識・背景情報の見出し\",\n"
+        "\"info_fact\":\"300文字程度の背景情報\",\n"
+        "\"items\":[{\"name\":\"選択肢\",\"text\":\"200文字以上の解説\",\"votes\":0}],\n"
+        "\"comments\":[{\"name\":\"匿名\",\"text\":\"コメント\"}]\n"
+        "}"
+    )
+
+    text = call_gemini(prompt, timeout=120)
+    if text:
+        result = parse_json_from_text(text)
+        if result and result.get("title", "") not in ["タイトル", "", "..."]:
+            if not result.get("items"):
+                result["items"] = [
+                    {"name": "期待してる", "text": "楽しみにしている理由を教えてください。", "votes": 0},
+                    {"name": "がっかり", "text": "期待外れだった理由を教えてください。", "votes": 0},
+                    {"name": "どちらでもない", "text": "中立派の意見をどうぞ。", "votes": 0}
+                ]
+            if not result.get("comments"):
+                result["comments"] = []
+            for com in result["comments"]:
+                com["name"] = "匿名"
+            print(" -> 完了 (コメント" + str(len(result.get("comments", []))) + "件)")
+            return result
+        else:
+            print(" -> JSONパース失敗 RAW先頭200: " + text[:200])
+    else:
+        print(" -> API応答なし")
+    return None
+
 def get_term_id(slug):
     try:
         res = requests.get(WP_URL + "/wp-json/wp/v2/categories?slug=" + slug, headers=get_auth_header_get())
@@ -664,6 +725,9 @@ if not selected_items:
     print("❌ ネタ切れ")
 else:
     for item in selected_items:
+        # 2記事は既存形式、3記事目はニュース形式
+        is_news_slot = (success_count == 2)
+
         if success_count >= ARTICLES_TO_CREATE:
             print("🎉 目標記事数（" + str(ARTICLES_TO_CREATE) + "記事）に達したため、処理を終了します。")
             break
@@ -700,16 +764,27 @@ else:
         time.sleep(15)
         print(" 再開")
 
-        data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
-        if not data:
-            continue
-
-        if analysis_data['article_type'] == "WHICH_BEST" and len(data.get('items', [])) < 2:
-            analysis_data['article_type'] = "LIKE_DISLIKE"
+        # 3記事目はニュース形式
+        if is_news_slot:
+            data = generate_news_article_content(item['headline'], core_kw, news_data, fact_check_data)
+            if not data:
+                print(" -> ニュース形式失敗、既存形式で代替")
+                data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
+            if not data:
+                continue
+            # ニュース形式は items_category を like_dislike 扱い
             items_category = "like_dislike"
+        else:
             data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
             if not data:
                 continue
+
+            if analysis_data['article_type'] == "WHICH_BEST" and len(data.get('items', [])) < 2:
+                analysis_data['article_type'] = "LIKE_DISLIKE"
+                items_category = "like_dislike"
+                data = generate_article_content(analysis_data, item['headline'], fact_check_data, news_data, items_category)
+                if not data:
+                    continue
 
         items_str = []
         meta = {
