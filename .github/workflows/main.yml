@@ -31,4 +31,6 @@ jobs:
         env:
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
         run: python main.py
